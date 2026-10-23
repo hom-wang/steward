@@ -22,7 +22,7 @@ step "plg sync" bash -c '
 # Everything in the repo is plain ASCII, apart from the box-drawing dividers and spinner glyphs in steward.sh
 step "ascii only" bash -c '
   tab=$(printf "\t")
-  found=$(grep -n "[^ -~$tab]" "'"$dev"'/steward.sh" "'"$dev"'/steward.plg" "'"$dev"'/README.md" "'"$dev"'/LICENSE" "'"$dev"'"/tests/* "'"$dev"'"/.github/workflows/* "'"$dev"'"/plugins/*.xml "'"$dev"'/ca_profile.xml" "'"$dev"'"/images/*.svg "'"$dev"'"/docs/*.md | grep -v "[─⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✔✘]")
+  found=$(grep -n "[^ -~$tab]" "'"$dev"'/steward.sh" "'"$dev"'/steward.plg" "'"$dev"'/README.md" "'"$dev"'/RELEASING.md" "'"$dev"'/LICENSE" "'"$dev"'"/tests/* "'"$dev"'"/.github/workflows/* "'"$dev"'"/plugins/*.xml "'"$dev"'/ca_profile.xml" "'"$dev"'"/images/*.svg "'"$dev"'"/docs/*.md | grep -v "[─⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✔✘]")
   if [ -n "$found" ]; then printf "%s\n" "$found" | head -n 5 | cut -c1-120; echo "non-ASCII text found (see above)"; exit 1; fi
   echo "ASCII only, apart from the allowed glyphs"'
 
@@ -52,6 +52,11 @@ rm -f "$tmp"
 step "auto_update scenarios" bash "$here/autoupdate-test.sh" "$dev/steward.sh"
 
 step "download and checksum scenarios" bash "$here/download-test.sh" "$dev/steward.sh"
+
+# Version bump and release invariants against main (RELEASING.md), including uncommitted edits. Local runs only:
+# CI runs release-check in its own step with the PR's target and source branch.
+[ -z "${CI:-}" ] && git -C "$dev" rev-parse -q --verify origin/main >/dev/null &&
+  step "release rules (against origin/main)" bash "$here/release-check.sh" origin/main
 
 [ "${1:-}" = --quick ] || step "smoke test (fake root)" bash "$here/smoke-test.sh" "$dev/steward.sh"
 
