@@ -26,3 +26,11 @@ jobs:
 
       - name: Quick tests (syntax, plugin sync, hook cases, auto-update scenarios)
         run: bash tests/run-all.sh --quick
+
+      - name: Release rules (version bump, changelog, release branch flow, fixed update URL)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          # a branch from a fork never counts as a release branch
+          HEAD_REF: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.head_ref || format('fork/{0}', github.head_ref) }}
+        run: bash tests/release-check.sh origin/main "$BASE_REF" "$HEAD_REF"
