@@ -48,6 +48,25 @@ check grep -q -- '--spawn same-dir' "$S/steward.conf"
 [ "$(syslog_lines)" = "$before" ] && ok "nothing written to syslog" || bad "test wrote to the real syslog ($before -> $(syslog_lines))"
 grep -q '^TAG="STEWARD_SVC"' "$S/steward.sh" && ok "script carries the production TAG" || bad "script lacks the TAG"
 
+check test ! -e "$S/home/skills" # optional skills are not installed by default
+
+# -- 1b. Optional skills: install from the shipped copy, list, remove --
+cp -r "$here/../skills" "$T/usr/local/emhttp/plugins/steward/" # all shipped copies, so the test never reaches for the network
+run "$T" skills install unraid >"$BASE/skills.log" 2>&1 || bad "skills install exited non-zero (see $BASE/skills.log)"
+check cmp -s "$S/home/skills/unraid/SKILL.md" "$here/../skills/unraid/SKILL.md"
+run "$T" skills list >"$BASE/skills-list.log" 2>&1
+grep -E '^  unraid +[0-9.]+ +verified .* installed [0-9]' "$BASE/skills-list.log" | grep -qv 'not installed' && ok "skills list shows unraid installed" || bad "skills list does not show unraid as installed (see $BASE/skills-list.log)"
+grep -E '^  unraid-health +[0-9.]+ .* not installed$' "$BASE/skills-list.log" >/dev/null && ok "skills list shows unraid-health not installed" || bad "skills list is wrong about unraid-health (see $BASE/skills-list.log)"
+grep -q 'not available offline' "$BASE/skills-list.log" && bad "skills list fell back to downloading although shipped copies exist" || ok "skills list used the shipped copies"
+echo "# edited by the user" >>"$S/home/skills/unraid/SKILL.md"
+run "$T" skills list >"$BASE/skills-list2.log" 2>&1; grep -q 'differs from the shipped copy' "$BASE/skills-list2.log" && ok "skills list flags a locally edited copy" || bad "skills list does not flag the edited copy"
+run "$T" skills install unraid >/dev/null 2>&1
+[ "$(ls "$S/home/skills/unraid"/SKILL.md.before-* 2>/dev/null | wc -l)" = 1 ] && ok "reinstall keeps the edited copy as a backup" || bad "reinstall did not back up the edited copy"
+run "$T" skills remove unraid >/dev/null 2>&1
+check test ! -e "$S/home/skills" # removing the last skill leaves no empty directory behind
+run "$T" skills install nosuchskill >/dev/null 2>&1 && bad "unknown skill name was accepted" || ok "unknown skill name is rejected"
+run "$T" skills install "unraid unraid-docs" >/dev/null 2>&1 && bad "a name with a space was accepted" || ok "a name with a space is rejected"
+
 # -- 2. Repeated install: existing settings untouched --
 sum() { md5sum "$S/steward.conf" "$S/home/settings.json" "$S/home/CLAUDE.md" "$S/hooks/bash-guard.sh" | awk '{print $1}' | tr '\n' ' '; }
 echo '# a change made by the user' >>"$S/steward.conf"

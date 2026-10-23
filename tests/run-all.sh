@@ -19,10 +19,30 @@ step "plg sync" bash -c '
   v1=$(sed -n "s/.*ENTITY version *\"\([^\"]*\)\".*/\1/p" "'"$dev"'/steward.plg"); v2=$(sed -n "s/^STEWARD_VERSION=\"\(.*\)\"/\1/p" "'"$dev"'/steward.sh")
   [ "$v1" = "$v2" ] && echo "versions match: $v1" || { echo "version mismatch: plg=$v1 sh=$v2"; exit 1; }'
 
+# Every skill in skills/ is embedded verbatim in the plg and listed in SKILL_NAMES; every listed name has a directory
+step "skills sync" bash -c '
+  rc=0; names=""
+  for d in "'"$dev"'"/skills/*/; do
+    n=$(basename "$d"); names="$names $n"
+    [ -f "$d/SKILL.md" ] || { echo "$n: no SKILL.md"; rc=1; continue; }
+    grep -q "\]\]>" "$d/SKILL.md" && { echo "$n: SKILL.md contains ]]>"; rc=1; }
+    # the plugin manager trims INLINE content and appends one newline, so the file must start with text and end with exactly one newline
+    [ "$(head -c3 "$d/SKILL.md")" = "---" ] || { echo "$n: SKILL.md must start with the --- front matter line"; rc=1; }
+    [ -n "$(tail -n1 "$d/SKILL.md")" ] && [ "$(tail -c1 "$d/SKILL.md" | od -An -c | tr -d " ")" = "\\n" ] || { echo "$n: SKILL.md must end with exactly one newline"; rc=1; }
+    for k in skill-version unraid-verified unraid-applies; do grep -q "^  $k: " "$d/SKILL.md" || { echo "$n: front matter lacks $k"; rc=1; }; done
+    s=$(grep -n "^<FILE Name=\"/usr/local/emhttp/plugins/steward/skills/$n/SKILL.md\">" "'"$dev"'/steward.plg" | cut -d: -f1)
+    [ -n "$s" ] || { echo "$n: not embedded in steward.plg"; rc=1; continue; }
+    e=$(awk -v s=$s "NR>s && /^\]\]><\/INLINE>/ {print NR; exit}" "'"$dev"'/steward.plg")
+    sed -n "$((s+2)),$((e-1))p" "'"$dev"'/steward.plg" | cmp -s - "$d/SKILL.md" && echo "$n: embedded copy matches" || { echo "$n: embedded copy differs"; rc=1; }
+  done
+  listed=$(sed -n "s/^SKILL_NAMES=\"\(.*\)\".*/\1/p" "'"$dev"'/steward.sh")
+  [ "$(echo $names | tr " " "\n" | sort | tr "\n" " ")" = "$(echo $listed | tr " " "\n" | sort | tr "\n" " ")" ] && echo "SKILL_NAMES matches skills/: $listed" || { echo "SKILL_NAMES ($listed) differs from skills/ ($names)"; rc=1; }
+  exit $rc'
+
 # Everything in the repo is plain ASCII, apart from the box-drawing dividers and spinner glyphs in steward.sh
 step "ascii only" bash -c '
   tab=$(printf "\t")
-  found=$(grep -n "[^ -~$tab]" "'"$dev"'/steward.sh" "'"$dev"'/steward.plg" "'"$dev"'/README.md" "'"$dev"'/LICENSE" "'"$dev"'"/tests/* "'"$dev"'"/.github/workflows/* "'"$dev"'"/plugins/*.xml "'"$dev"'/ca_profile.xml" "'"$dev"'"/images/*.svg "'"$dev"'"/docs/*.md | grep -v "[─⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✔✘]")
+  found=$(grep -n "[^ -~$tab]" "'"$dev"'/steward.sh" "'"$dev"'/steward.plg" "'"$dev"'/README.md" "'"$dev"'/LICENSE" "'"$dev"'"/tests/* "'"$dev"'"/.github/workflows/* "'"$dev"'"/plugins/*.xml "'"$dev"'/ca_profile.xml" "'"$dev"'"/images/*.svg "'"$dev"'"/docs/*.md "'"$dev"'"/skills/*/SKILL.md | grep -v "[─⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✔✘]")
   if [ -n "$found" ]; then printf "%s\n" "$found" | head -n 5 | cut -c1-120; echo "non-ASCII text found (see above)"; exit 1; fi
   echo "ASCII only, apart from the allowed glyphs"'
 
