@@ -33,4 +33,4 @@ Install URL (Plugins -> Install Plugin): `https://raw.githubusercontent.com/hom-
 
 Full documentation, configuration options and troubleshooting are in the README on GitHub. Bug reports and feature requests are welcome here or on the GitHub issue tracker.
 
-Steward is an independent, community-maintained project. It is not affiliated with, endorsed by, or sponsored by Anthropic PBC or Lime Technology, Inc. "Claude" and "Claude Code" are trademarks of Anthropic PBC; "Unraid" is a trademark of Lime Technology, Inc. Steward installs the unmodified Claude Code binary through Anthropic's official installer and never sees, stores or forwards your credentials.
+Steward is an independent, community-maintained project. It is not affiliated with, endorsed by, or sponsored by Anthropic PBC or Lime Technology, Inc. "Claude" and "Claude Code" are trademarks of Anthropic PBC; "Unraid" is a trademark of Lime Technology, Inc. Steward downloads the unmodified Claude Code binary from Anthropic's release server, pinned to one version and verified against its published SHA256, and never sees, stores or forwards your credentials.

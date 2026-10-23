@@ -24,6 +24,8 @@ sessions_busy() { ((BUSY)); }
 curl() { [ -n "$STABLE" ] && echo "$STABLE"; }
 # auto_update runs the installer in a subshell, so the install record must go to a file to be visible here
 fake_claude() { printf 'install:%s ' "$2" >>"$W/calls"; ((INSTALL_OK)) && echo "$2" >"$W/installed"; }
+VERIFY_OK=1
+verify_installed() { CALLS+="verify "; ((VERIFY_OK)); }
 cache_binary() { CALLS+="cache "; }
 cmd_restart() { CALLS+="restart "; ((RESTART_OK)) && RUNNING=$(claude_ver); ((RESTART_OK)); }
 notify_user() { CALLS+="notify "; }
@@ -51,17 +53,19 @@ reset; STABLE=2.1.290; auto_update; check "newer than stable: no downgrade" "" y
 reset; STABLE=; auto_update; check "version lookup failed (offline): no action, retry in an hour" "" n
 reset; STABLE=garbage; auto_update; check "malformed version string: no action" "" n
 STABLE=2.1.308
-reset; auto_update; check "new version, idle: install, cache, restart, notify" "install:2.1.308 cache restart notify " y
+reset; auto_update; check "new version, idle: install, verify, cache, restart, notify" "install:2.1.308 verify cache restart notify " y
 CALLS=""; NOW=$((NOW + 7200)); auto_update; check "second run on the same day: no action" "" y
 INSTALLED=2.1.296 RUNNING=2.1.296
-reset; BUSY=1; auto_update; check "sessions busy: install only, no restart" "install:2.1.308 cache " n
+reset; VERIFY_OK=0; auto_update; check "installed binary fails verification: no cache, no restart, not done" "install:2.1.308 verify " n
+VERIFY_OK=1
+reset; BUSY=1; auto_update; check "sessions busy: install only, no restart" "install:2.1.308 verify cache " n
 CALLS=""; NOW=$((NOW + 1800)); auto_update; check "30 minutes later: retry time not reached" "" n
 CALLS=""; NOW=$((NOW + 1900)); auto_update; check "an hour later, still busy: no reinstall, no restart" "" n
 CALLS=""; NOW=$((NOW + 3700)); BUSY=0; auto_update; check "idle again: no reinstall, restart to apply" "restart notify " y
 INSTALLED=2.1.296 RUNNING=2.1.296
 reset; INSTALL_OK=0; auto_update; check "install failed: no restart, not marked done" "install:2.1.308 " n
 INSTALL_OK=1
-reset; RESTART_OK=0; auto_update; check "restart failed: not marked done, no notification" "install:2.1.308 cache restart " n
+reset; RESTART_OK=0; auto_update; check "restart failed: not marked done, no notification" "install:2.1.308 verify cache restart " n
 RESTART_OK=1
 reset; RUNNING=; auto_update; check "remote-control not running: no action" "" n
 RUNNING=2.1.296

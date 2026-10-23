@@ -7,8 +7,8 @@
 # Copyright (c) 2026 hom-wang (https://github.com/hom-wang)
 # Steward is an independent, community-maintained project. It is not affiliated with, endorsed by,
 # or sponsored by Anthropic PBC or Lime Technology, Inc. "Claude" and "Claude Code" are trademarks of
-# Anthropic PBC; "Unraid" is a trademark of Lime Technology, Inc. This tool installs the unmodified
-# Claude Code binary via Anthropic's official installer and runs it as a background service. You sign
+# Anthropic PBC; "Unraid" is a trademark of Lime Technology, Inc. This tool downloads the unmodified
+# Claude Code binary from Anthropic's release server, pinned to one version and checked against its published SHA256, and runs it as a background service. You sign
 # in with your own Claude subscription through Anthropic's own login flow; Steward never sees, stores,
 # or forwards your credentials, and all usage is billed to your own account.
 #
@@ -36,7 +36,7 @@
 #   so the watchdog checks once a day after 08:00 and restarts to apply the update only when no session is in use (see auto_update).
 
 set -u
-STEWARD_VERSION="2026.10.25"
+STEWARD_VERSION="2026.10.25.1"
 SPIN_PID="" SPIN_FILE="" SPIN_MSG="" SPIN_T0=0 SPIN_ACTIVE=0 SPIN_OWNER=$$ FANCY=0 TTY_FD=2 HOLD_WINDOW=0
 cleanup() { # every exit path ends up here, including Ctrl+C and the terminal being closed
   if [ -n "$SPIN_PID" ]; then # progress display still running: stop it and wipe that line
@@ -79,7 +79,7 @@ TAG="STEWARD_SVC" # every process under the service carries this env var; that i
 [ -n "$P" ] && TAG="STEWARD_SVC_TEST" # fake-root tests: use a different tag so tagged_pids / kill_tagged never touch the real service
 MARK="# steward"
 PLG="$P/boot/config/plugins/steward.plg"   # this file exists = installed via the plugin
-INSTALL_LOG="$RUN_DIR/steward.install.log" # most recent output of the official installer
+INSTALL_LOG="$RUN_DIR/steward.install.log" # most recent output of the Claude Code download or update
 JOBLOG="$RUN_DIR/steward.job.log"          # jobs triggered by settings-page buttons write their output here for the web page to read
 JOBLOCK="$RUN_DIR/steward.job.lock"
 PLUGIN=0
@@ -91,6 +91,13 @@ export PATH="$BIN_DIR:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/b
 case "${LC_ALL:-${LANG:-}}" in *[Uu][Tt][Ff]*) ;; *) export LANG=C.UTF-8 ;; esac # the boot script's environment has no locale; add UTF-8
 NATIVE_BIN="$HOME/.local/bin/claude"
 VERSIONS="$HOME/.local/share/claude/versions"
+# Where Claude Code releases come from, and the one version a fresh install downloads. The binary is only installed if its
+# SHA256 matches the pinned value below (taken from Anthropic's published manifest for that version). Both values are
+# updated with each Steward release; later updates go through Claude Code's own updater and are checked against the manifest.
+CLAUDE_RELEASES="https://downloads.claude.ai/claude-code-releases"
+CLAUDE_PLATFORM="linux-x64"
+CLAUDE_PIN_VERSION="2.1.308"
+CLAUDE_PIN_SHA256="356733f185fa988e6bf3aa9a555269fdd167982a2e2a80d3c8a78037bb92ad58"
 
 if [ -n "${STEWARD_TEST_FAST:-}" ]; then TICK=2 BASE=1 HEALTHY=4 NETWAIT=1 BEAT=2; else TICK=600 BASE=5 HEALTHY=300 NETWAIT=10 BEAT=10; fi
 
@@ -387,7 +394,36 @@ on_array_stop() { # the array is about to stop: if a process under the service i
 claude_ok() { [ -x "$NATIVE_BIN" ] && "$NATIVE_BIN" --version >/dev/null 2>&1; }
 claude_ver() { "$NATIVE_BIN" --version 2>/dev/null | awk '{print $1; exit}'; }
 
-cache_binary() { # back up the version currently in use to the boot drive; after an update this follows along
+file_sha256() { sha256sum "$1" 2>/dev/null | awk '{print $1; exit}'; }
+manifest_sha256() { # $1=version. The SHA256 Anthropic publishes for this platform and version, or nothing if it cannot be fetched
+  curl -fsS --max-time 20 "$CLAUDE_RELEASES/$1/manifest.json" 2>/dev/null |
+    jq -r --arg p "$CLAUDE_PLATFORM" '.platforms[$p].checksum // empty' 2>/dev/null | grep -E '^[0-9a-f]{64}$'
+}
+other_version() { # $1=version to exclude. The newest other installed version, or nothing
+  find "$VERSIONS" -maxdepth 1 -type f -name '[0-9]*' ! -name "$1" ! -name '.*' 2>/dev/null | sed 's|.*/||' | sort -V | tail -n1
+}
+
+verify_installed() { # $1=version that Claude Code's own updater just installed. Compare it with the published checksum; on mismatch remove it and point the launcher back
+  local f="$VERSIONS/$1" want got prev
+  want=$(manifest_sha256 "$1")
+  got=$(file_sha256 "$f")
+  if [ -n "$want" ] && [ "$got" = "$want" ]; then
+    log "Claude Code $1 matches the published SHA256"
+    return 0
+  fi
+  if [ -z "$want" ]; then
+    log "Claude Code $1: could not fetch the published SHA256, so it is not kept; retrying later"
+  else
+    log "Claude Code $1 does NOT match the published SHA256 (expected $want, got $got); removed"
+    notify_user "Claude Code $1 failed verification" "The downloaded binary did not match the checksum Anthropic publishes for this version and was removed. The previous version stays in use. See $LOG"
+  fi
+  rm -f "$f"
+  prev=$(other_version "$1")
+  if [ -n "$prev" ]; then ln -sfn "$VERSIONS/$prev" "$NATIVE_BIN"; else rm -f "$NATIVE_BIN"; fi
+  return 1
+}
+
+cache_binary() { # back up the version currently in use to the boot drive, with its SHA256; after an update this follows along
   local cur ver
   cur=$(readlink -f "$NATIVE_BIN" 2>/dev/null) || return 0
   ver=${cur##*/}
@@ -396,21 +432,29 @@ cache_binary() { # back up the version currently in use to the boot drive; after
   [ "$("$cur" --version 2>/dev/null | awk '{print $1; exit}')" = "$ver" ] || return 0 # do not keep a half-downloaded file
   spin_msg "Backing up Claude Code $ver to the boot drive"
   mkdir -p "$CACHE"
-  if cp -f "$cur" "$CACHE/.tmp.$$" && mv -f "$CACHE/.tmp.$$" "$CACHE/claude-$ver"; then
-    find "$CACHE" -maxdepth 1 -type f -name 'claude-*' ! -name "claude-$ver" -delete
+  if cp -f "$cur" "$CACHE/.tmp.$$" && mv -f "$CACHE/.tmp.$$" "$CACHE/claude-$ver" && file_sha256 "$CACHE/claude-$ver" >"$CACHE/claude-$ver.sha256"; then
+    find "$CACHE" -maxdepth 1 -type f -name 'claude-*' ! -name "claude-$ver" ! -name "claude-$ver.sha256" -delete
     log "Backed up Claude Code $ver to the boot drive"
   else
-    rm -f "$CACHE/.tmp.$$"
+    rm -f "$CACHE/.tmp.$$" "$CACHE/claude-$ver.sha256"
     log "Backing up Claude Code $ver failed (boot drive out of space?)"
   fi
 }
 
 restore_binary() { # restore from the boot drive into the native install layout (versions/<version> plus the launcher shortcut). No network needed
-  local f ver tmp
-  f=$(find "$CACHE" -maxdepth 1 -type f -name 'claude-*' 2>/dev/null | sort -V | tail -n1)
+  local f ver tmp want
+  f=$(find "$CACHE" -maxdepth 1 -type f -name 'claude-*' ! -name '*.sha256' 2>/dev/null | sort -V | tail -n1)
   [ -n "$f" ] || return 1
   spin_msg "Restoring Claude Code from the boot drive"
   ver=${f##*/claude-}
+  # the backup must still match the checksum recorded when it was made; the pinned version must match the pinned value
+  want=$(cat "$f.sha256" 2>/dev/null)
+  [ "$ver" = "$CLAUDE_PIN_VERSION" ] && want=$CLAUDE_PIN_SHA256
+  if [ -n "$want" ] && [ "$(file_sha256 "$f")" != "$want" ]; then
+    log "The backup of Claude Code $ver on the boot drive does not match its SHA256; discarding it"
+    rm -f "$f" "$f.sha256"
+    return 1
+  fi
   tmp="$HOME/.local/share/claude/.restore.$$"
   mkdir -p "$VERSIONS" "${NATIVE_BIN%/*}"
   if ! { cp -f "$f" "$tmp" && chmod 755 "$tmp" && mv -f "$tmp" "$VERSIONS/$ver"; }; then
@@ -420,33 +464,46 @@ restore_binary() { # restore from the boot drive into the native install layout 
   ln -sfn "$VERSIONS/$ver" "$NATIVE_BIN"
   [ "$(claude_ver)" = "$ver" ] && return 0
   # the restored file does not run. Only when it is identical to the backup does that mean the backup itself is broken: discard it and fall back to downloading
-  cmp -s "$f" "$VERSIONS/$ver" && rm -f "$f"
+  cmp -s "$f" "$VERSIONS/$ver" && rm -f "$f" "$f.sha256"
   rm -f "$VERSIONS/$ver" "$NATIVE_BIN"
   return 1
 }
 
-download_binary() { # the official installer. Only reached on first install, or when the backup on the boot drive is gone. Returns 75 = another download is in progress
+download_binary() { # download the pinned Claude Code version straight from Anthropic's release server and install it only if its SHA256 matches the pinned value.
+  # Only reached on first install, or when the backup on the boot drive is gone. Returns 75 = another download is in progress
   local rc
   (
     flock -n 8 || exit 75
-    local i tmp rc
+    local i tmp sum
     : >"$INSTALL_LOG"
     spin_msg "Connecting to downloads.claude.ai"
     for ((i = 0; i < 30; i++)); do # the network may not be up yet early in boot; wait up to 5 minutes
-      curl -fsS --max-time 10 -o /dev/null https://downloads.claude.ai/claude-code-releases/latest >>"$INSTALL_LOG" 2>&1 && break
+      curl -fsS --max-time 10 -o /dev/null "$CLAUDE_RELEASES/$CLAUDE_PIN_VERSION/manifest.json" >>"$INSTALL_LOG" 2>&1 && break
       ((i == 0)) && spin_msg "Waiting for network, retrying every $NETWAIT s (up to 5 minutes)"
       sleep "$NETWAIT"
     done
-    ((i < 30)) || exit 1
+    ((i < 30)) || { echo "downloads.claude.ai is not reachable" >>"$INSTALL_LOG"; exit 1; }
+    mkdir -p "$VERSIONS" "${NATIVE_BIN%/*}" || exit 1
     find "$VERSIONS" -maxdepth 1 -type f -size 0 -delete 2>/dev/null # an interrupted previous run may have left an empty file
-    tmp=$(mktemp "/tmp/.steward-install.$$.XXXXXX") || exit 1
-    spin_msg "Downloading and installing Claude Code" "$HOME/.claude/downloads $VERSIONS"
-    # the installer's output always goes to a file: neither it nor any process it leaves in the background may hold the caller's terminal or pipe
-    curl -fsSL --max-time 60 https://claude.ai/install.sh -o "$tmp" >>"$INSTALL_LOG" 2>&1 &&
-      bash "$tmp" </dev/null >>"$INSTALL_LOG" 2>&1
-    rc=$?
-    rm -f "$tmp"
-    exit "$rc"
+    tmp="$VERSIONS/.download.$$"
+    spin_msg "Downloading Claude Code $CLAUDE_PIN_VERSION" "$tmp"
+    if ! curl -fsSL --max-time 1800 --speed-limit 1024 --speed-time 60 -o "$tmp" "$CLAUDE_RELEASES/$CLAUDE_PIN_VERSION/$CLAUDE_PLATFORM/claude" >>"$INSTALL_LOG" 2>&1; then
+      echo "Downloading Claude Code $CLAUDE_PIN_VERSION failed" >>"$INSTALL_LOG"
+      rm -f "$tmp"
+      exit 1
+    fi
+    sum=$(file_sha256 "$tmp")
+    if [ "$sum" != "$CLAUDE_PIN_SHA256" ]; then
+      echo "Claude Code $CLAUDE_PIN_VERSION: SHA256 mismatch, not installed (expected $CLAUDE_PIN_SHA256, got $sum)" >>"$INSTALL_LOG"
+      rm -f "$tmp"
+      exit 1
+    fi
+    echo "Claude Code $CLAUDE_PIN_VERSION downloaded, SHA256 verified" >>"$INSTALL_LOG"
+    if ! { chmod 755 "$tmp" && mv -f "$tmp" "$VERSIONS/$CLAUDE_PIN_VERSION" && ln -sfn "$VERSIONS/$CLAUDE_PIN_VERSION" "$NATIVE_BIN"; }; then
+      rm -f "$tmp"
+      exit 1
+    fi
+    exit 0
   ) 8>"$RUN_DIR/steward.download.lock"
   rc=$?
   ((rc == 0)) || return "$rc"
@@ -460,7 +517,7 @@ ensure_binary() {
     log "Restored Claude Code $(claude_ver) from the boot drive"
     return 0
   fi
-  log "No usable backup on the boot drive, downloading with the official installer instead"
+  log "No usable backup on the boot drive, downloading Claude Code $CLAUDE_PIN_VERSION instead"
   download_binary
 }
 
@@ -1142,6 +1199,7 @@ auto_update() {
       log "Auto-update: $latest did not install properly (exit code $rc), retrying in an hour (output in $INSTALL_LOG)"
       return 0
     fi
+    verify_installed "$latest" || return 0 # the updater's download is checked against the published SHA256 before it is kept
     cache_binary
     cur=$latest
   fi
@@ -1165,6 +1223,15 @@ cmd_update() {
   "$NATIVE_BIN" update # It shows its own progress
   after=$(readlink -f "$NATIVE_BIN")
   ver=${after##*/}
+  if [ "$before" != "$after" ]; then
+    spin_start "Checking Claude Code $ver against the published SHA256"
+    if verify_installed "$ver"; then
+      spin_stop ok "Claude Code $ver matches the published SHA256"
+    else
+      spin_stop fail "Claude Code $ver did not verify and was removed; the previous version stays in use"
+      return 1
+    fi
+  fi
   if [ ! -f "$CACHE/claude-$ver" ]; then
     spin_start "Backing up Claude Code $ver to the boot drive"
     cache_binary

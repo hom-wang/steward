@@ -51,6 +51,8 @@ rm -f "$tmp"
 
 step "auto_update scenarios" bash "$here/autoupdate-test.sh" "$dev/steward.sh"
 
+step "download and checksum scenarios" bash "$here/download-test.sh" "$dev/steward.sh"
+
 [ "${1:-}" = --quick ] || step "smoke test (fake root)" bash "$here/smoke-test.sh" "$dev/steward.sh"
 
 ((rc == 0)) && echo "all passed" || echo "some tests failed"
