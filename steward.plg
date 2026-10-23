@@ -2,7 +2,7 @@
 <!DOCTYPE PLUGIN [
 <!ENTITY name    "steward">
 <!ENTITY author  "hom-wang">
-<!ENTITY version "2026.10.25.1">
+<!ENTITY version "2026.10.26">
 <!ENTITY launch  "Settings/Steward">
 ]>
 
@@ -25,12 +25,16 @@
   and the old plugin is torn down.
 
   The whole plugin is in this one file. In order below: the README, the settings page, the settings
-  page's backend, the main script, and the steps run on install and removal.
+  page's backend, the main script, the optional skills, and the steps run on install and removal.
 -->
 
 <PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" icon="terminal" min="7.3.0" pluginURL="https://raw.githubusercontent.com/hom-wang/steward/main/steward.plg" support="https://github.com/hom-wang/steward/issues">
 
 <CHANGES>
+### 2026.10.26
+- Optional skills for Claude, installed only on request with "steward skills install NAME": unraid (operating guide), unraid-docs (how to find correct information for the installed version), unraid-tools (which commands exist on Unraid), unraid-health (read-only health check). Each records the Unraid version it was verified on. A fresh install still ships none of them.
+- The locale export is en_US.UTF-8, the only UTF-8 locale Unraid ships; upgrading from claude-unraid also removes the old plugin's RAM marker.
+
 ### 2026.10.25.1
 - First install no longer runs Anthropic's install.sh. Steward downloads one pinned Claude Code version straight from the release server and installs it only if its SHA256 matches the value built into the plugin. The backup on the boot device is checked the same way before it is restored.
 - After an automatic or manual update, the binary Claude Code's own updater installed is checked against the SHA256 Anthropic publishes for that version; a mismatch removes it, keeps the previous version and sends a notification.
@@ -65,6 +69,7 @@
 # The plugin manager does not overwrite files that already exist, so first clear the ones the previous version left in RAM
 D=/usr/local/emhttp/plugins/steward
 rm -f "$D/README.md" "$D/Steward.page" "$D/include/exec.php" "$D/scripts/steward.sh"
+rm -rf "$D/skills"
 exit 0
 ]]></INLINE>
 </FILE>
@@ -336,7 +341,7 @@ passthru('bash '.escapeshellarg($script).' _gui '.$actions[$action].' 2>&1');
 #   so the watchdog checks once a day after 08:00 and restarts to apply the update only when no session is in use (see auto_update).
 
 set -u
-STEWARD_VERSION="2026.10.25.1"
+STEWARD_VERSION="2026.10.26"
 SPIN_PID="" SPIN_FILE="" SPIN_MSG="" SPIN_T0=0 SPIN_ACTIVE=0 SPIN_OWNER=$$ FANCY=0 TTY_FD=2 HOLD_WINDOW=0
 cleanup() { # every exit path ends up here, including Ctrl+C and the terminal being closed
   if [ -n "$SPIN_PID" ]; then # progress display still running: stop it and wipe that line
@@ -388,7 +393,7 @@ PLUGIN=0
 export HOME="$P/root"
 export CLAUDE_CONFIG_DIR="$CFG_DIR"
 export PATH="$BIN_DIR:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin"
-case "${LC_ALL:-${LANG:-}}" in *[Uu][Tt][Ff]*) ;; *) export LANG=C.UTF-8 ;; esac # the boot script's environment has no locale; add UTF-8
+case "${LC_ALL:-${LANG:-}}" in *[Uu][Tt][Ff]*) ;; *) export LANG=en_US.UTF-8 ;; esac # the boot script's environment has no locale; en_US.UTF-8 is the only UTF-8 locale Unraid ships (C.UTF-8 does not exist and makes perl/virsh warn)
 NATIVE_BIN="$HOME/.local/bin/claude"
 VERSIONS="$HOME/.local/share/claude/versions"
 # Where Claude Code releases come from, and the one version a fresh install downloads. The binary is only installed if its
@@ -1267,6 +1272,7 @@ migrate_legacy() { # Upgrade from the old name claude-unraid: move the data, sto
     # Do not run the old plugin's remove section: it would delete the shared /usr/local/bin/claude too. Moving it to plugins-removed stops it from loading
     mkdir -p "$P/boot/config/plugins-removed"
     mv -f "$P/boot/config/plugins/claude-unraid.plg" "$P/boot/config/plugins-removed/"
+    rm -f "$P/var/log/plugins/claude-unraid.plg" # the plugin manager's "installed" marker (RAM); otherwise update_cron keeps looking for the old plugin until reboot
   fi
   [ -e "$P/usr/local/sbin/update_cron" ] && bash "$P/usr/local/sbin/update_cron" >/dev/null 2>&1
   # Paths and names inside the old config files (originals backed up)
@@ -1776,6 +1782,99 @@ cmd_gui() {
   esac
 }
 
+# ───────────────────────── Optional skills ─────────────────────────
+# Guides for Claude (array, docs, tools, health checks) that a user can opt into. A fresh install ships none of them:
+# the plugin carries the files under $PLUGIN_DIR/skills, and "steward skills install" copies one into the config dir,
+# where Claude Code picks it up at the next session. Script installs have no plugin dir and download from the repository.
+SKILLS_SRC="$PLUGIN_DIR/skills"
+SKILLS_DST="$CFG_DIR/skills"
+SKILLS_RAW="https://raw.githubusercontent.com/hom-wang/steward/main/skills"
+SKILL_NAMES="unraid unraid-docs unraid-tools unraid-health" # must match the skills/ directory in the repository (tests check)
+
+skill_source() { # $1=name $2=download timeout in seconds. Prints the path of a SKILL.md to install from: the shipped copy, else a downloaded temp file
+  if [ -f "$SKILLS_SRC/$1/SKILL.md" ]; then
+    printf '%s\n' "$SKILLS_SRC/$1/SKILL.md"
+    return 0
+  fi
+  local t
+  t=$(mktemp "/tmp/.steward-install.$$.skill.XXXXXX") || return 1 # the cleanup trap removes /tmp/.steward-install.$$.* on any exit
+  # Accept the download only if it looks like one of our skills: a captive portal or proxy page also answers 200
+  if curl -fsSL --max-time "${2:-30}" "$SKILLS_RAW/$1/SKILL.md" -o "$t" 2>/dev/null && [ "$(head -n1 "$t")" = "---" ] &&
+    grep -qx "name: $1" "$t" && [ -n "$(skill_meta "$t" skill-version)" ]; then
+    printf '%s\n' "$t"
+  else
+    rm -f "$t"
+    return 1
+  fi
+}
+skill_meta() { # $1=SKILL.md $2=front-matter key (skill-version, unraid-verified, unraid-applies)
+  sed -n '2,/^---$/p' "$1" | sed -n "s/^[[:space:]]*$2:[[:space:]]*\"\{0,1\}\([^\"]*\)\"\{0,1\}[[:space:]]*$/\1/p" | head -n1
+}
+skill_known() { # $1=name. Only names from the fixed list, so nothing outside $SKILLS_DST/<name> can ever be touched
+  case "$1" in '' | *[!a-z0-9-]*) return 1 ;; esac
+  case " $SKILL_NAMES " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+skill_tmp_done() { case "$1" in /tmp/.steward-install.*) rm -f "$1" ;; esac; }
+
+cmd_skills() {
+  local sub=${1:-list} name f dst state
+  [ $# -gt 0 ] && shift
+  case "$sub" in
+  list)
+    say "Optional skills. Install: steward skills install <name>   Remove: steward skills remove <name>"
+    say "Installed skills live in $SKILLS_DST and are read by Claude Code at the start of each session."
+    [ -d "$SKILLS_SRC" ] || say "(no shipped copies on this install; versions below come from a quick download and may be missing offline)"
+    for name in $SKILL_NAMES; do
+      state="not installed"
+      if [ -f "$SKILLS_DST/$name/SKILL.md" ]; then state="installed $(skill_meta "$SKILLS_DST/$name/SKILL.md" skill-version)"; fi
+      if f=$(skill_source "$name" 8); then
+        if [ -f "$SKILLS_DST/$name/SKILL.md" ] && ! cmp -s "$f" "$SKILLS_DST/$name/SKILL.md"; then
+          if [ "$(skill_meta "$f" skill-version)" = "$(skill_meta "$SKILLS_DST/$name/SKILL.md" skill-version)" ]; then
+            state="$state, differs from the shipped copy (edited locally?)"
+          else
+            state="$state, update available $(skill_meta "$f" skill-version)"
+          fi
+        fi
+        printf '  %-14s %-12s verified %-7s applies %-10s %s\n' "$name" "$(skill_meta "$f" skill-version)" "$(skill_meta "$f" unraid-verified)" "$(skill_meta "$f" unraid-applies)" "$state"
+        skill_tmp_done "$f"
+      else
+        printf '  %-14s %-12s %-35s %s\n' "$name" "?" "(not available offline)" "$state"
+      fi
+    done
+    ;;
+  install)
+    [ $# -ge 1 ] || die "usage: steward skills install <name> [<name> ...]   (names: $SKILL_NAMES)"
+    for name in "$@"; do
+      skill_known "$name" || die "unknown skill: $name (steward skills list)"
+      f=$(skill_source "$name" 30) || die "cannot get $name: not shipped with this install and the download failed"
+      dst=$SKILLS_DST/$name
+      mkdir -p "$dst" || die "cannot create $dst"
+      if [ -f "$dst/SKILL.md" ] && ! cmp -s "$f" "$dst/SKILL.md"; then
+        cp -p "$dst/SKILL.md" "$dst/SKILL.md.before-$(date +%Y%m%d-%H%M%S)" || die "cannot back up the existing $dst/SKILL.md"
+        say "$name: existing copy differs, kept as SKILL.md.before-<timestamp>"
+      fi
+      cp "$f" "$dst/SKILL.md" && chmod 644 "$dst/SKILL.md" || die "cannot write $dst/SKILL.md"
+      say "$name $(skill_meta "$dst/SKILL.md" skill-version) installed (verified on Unraid $(skill_meta "$dst/SKILL.md" unraid-verified)); new sessions will see it"
+      skill_tmp_done "$f"
+    done
+    ;;
+  remove)
+    [ $# -ge 1 ] || die "usage: steward skills remove <name> [<name> ...]"
+    for name in "$@"; do
+      skill_known "$name" || die "unknown skill: $name"
+      if [ -d "$SKILLS_DST/$name" ]; then
+        rm -rf "${SKILLS_DST:?}/$name" && say "$name removed (including its SKILL.md.before-* backups)"
+      else
+        say "$name is not installed"
+      fi
+    done
+    rmdir "$SKILLS_DST" 2>/dev/null || true # back to the clean state when nothing is left
+    ;;
+  *) die "usage: steward skills [list | install <name> ... | remove <name> ...]" ;;
+  esac
+}
+
 usage() {
   cat <<'EOF'
 steward <command>
@@ -1788,6 +1887,7 @@ steward <command>
   logs [-f|N]  Show the log
   update       Update Claude Code now (normally updated automatically daily after 08:00 when no session is in use)
   uninstall    Remove hooks and stop the service, keeping the data (for plugin installs, remove it on the Plugins page)
+  skills       Optional guides for Claude: list, install <name>, remove <name>. Nothing is installed by default
 EOF
 }
 
@@ -1828,12 +1928,458 @@ _event) on_array_stop ;;
 _plugin_install) cmd_plugin_install ;;
 _plugin_remove) cmd_plugin_remove ;;
 _gui) cmd_gui "$@" ;;
+skills) cmd_skills "$@" ;;
 *) usage ;;
 esac
 ]]></INLINE>
 </FILE>
 
-<!-- 6. Install (also runs on every boot) -->
+<!-- 6. Optional skills: guides for Claude. Not installed by default; "steward skills install <name>" copies one into /boot/steward/home/skills -->
+<FILE Name="/usr/local/emhttp/plugins/steward/skills/unraid-docs/SKILL.md">
+<INLINE><![CDATA[
+---
+name: unraid-docs
+description: How to find correct, current information about Unraid for the exact version installed on this server, and how to tell outdated or wrong advice from the real thing. Use before acting on any claim about how Unraid works that you have not verified on this machine, when a guide or skill was written for a different Unraid version, when the owner asks "how do I" about a feature, and after Unraid itself has been updated.
+metadata:
+  skill-version: "2026.10.23"
+  unraid-verified: "7.3.3"
+  unraid-applies: "7.x"
+---
+
+# Finding the right Unraid information
+
+Unraid changes between releases: paths move, GUI pages are renamed, features appear (ZFS, Internal Boot, the API) and old advice keeps circulating on forums and blogs. The failure mode to avoid is applying a procedure written for one version to a server running another. This skill is about establishing what is true for *this* server.
+
+## 1. Always start from the installed version
+
+```
+cat /etc/unraid-version
+findmnt -no FSTYPE /boot     # vfat = USB boot stick, zfs = Internal Boot
+grep -E '^(mdState|fsState)=' /var/local/emhttp/var.ini
+```
+
+Write the version down in your working notes and compare it with whatever you read next. A guide that names a different major or minor version (6.12 versus 7.3) is a hypothesis until confirmed. A release candidate (`-rc`) may differ from the stable notes.
+
+Every Steward skill carries `unraid-verified` (the version it was checked on) and `unraid-applies` (the range it is believed to hold for) in its front matter. If the installed version is outside that range, treat the skill's version-specific claims as unverified and confirm them here before acting.
+
+## 2. Sources, in order of trust
+
+**1. The machine itself.** For "what does this version actually do", nothing beats reading the code that runs it:
+
+- `/usr/local/emhttp/languages/en_US/helptext.txt`: the help text shown by the "?" buttons in the webGUI, about 2,800 lines, organised as `:<page>_help:` ... `:end` blocks. Search it first for any setting: `grep -n -i -A 12 'mover' /usr/local/emhttp/languages/en_US/helptext.txt`.
+- `/usr/local/emhttp/plugins/dynamix/*.page`: the webGUI pages themselves. The file name matches the page title (`ArrayOperation.page`, `BootParameters.page`, `ShareEdit.page`). They show which settings exist, their allowed values and which script a button runs.
+- `/usr/local/emhttp/webGui/scripts/` (`webGui` is a symlink to `plugins/dynamix`, so this is the same directory as `plugins/dynamix/scripts/`): the scripts behind the GUI (`notify`, `diagnostics`, `manage_boot_params.sh`, `parity_control`, `flash_backup`). Unraid's own command-line tools are in `/usr/local/sbin/` (`update_cron`, `mover`, `newperms`, `sdspin`, `plugin`). Read a script before relying on a forum description of it.
+- `/etc/rc.d/rc.*`: service start scripts and the boot sequence (`rc.S`, `rc.local`, `rc.6`). They are the authority on what is read from `/boot/config` and when.
+- `/usr/local/emhttp/plugins/*/README.md` and each plugin's `.plg` in `/boot/config/plugins/`: what installed plugins do and which version they are.
+
+Use these to confirm a path or command exists before running it: `ls`, `grep -n`, `bash -n`. This is cheap and removes most version mistakes.
+
+**2. Official documentation: https://docs.unraid.net/** The content is organised in these sections (directory names in the docs repository; the section index URLs themselves may return 404, individual pages under them work):
+
+- `unraid-os/getting-started/`, `unraid-os/using-unraid-to/` (shares, Docker, VMs, Community Applications), `unraid-os/system-administration/` (security, networking, backups, the boot device), `unraid-os/troubleshooting/`, `unraid-os/updating-unraid/`, `unraid-os/advanced-configurations/`.
+- `unraid-os/release-notes/<version>/`, one page per release, for example `https://docs.unraid.net/unraid-os/release-notes/7.3.3/`. This is where behaviour changes are announced; read the notes for every release between the version a guide was written for and the installed one. The repository may already hold notes for releases newer than the installed one: check the version in the page title.
+- `https://docs.unraid.net/API/` (and `API/cli/`): the GraphQL API and the `unraid-api` CLI (Unraid 7.2 and later).
+- `https://docs.unraid.net/connect/`: Connect, remote access and automated Flash Backup.
+
+The docs are built from the public repository https://github.com/unraid/docs (branch `main`, pages under `docs/unraid-os/...` as Markdown). When a page is long, the site is slow, or a section index 404s, fetch the Markdown source instead: list a directory with `https://api.github.com/repos/unraid/docs/contents/docs/unraid-os/<section>` to get exact file names, then read the raw file.
+
+**3. Unraid's own code on GitHub.** https://github.com/unraid/webgui is the webGUI (the same files as in `/usr/local/emhttp`, with history, so you can see when something changed and in which release). https://github.com/unraid/api is the API and Connect plugin. Use these to answer "since which version" questions.
+
+**4. The forums: https://forums.unraid.net/** Release announcements and the pinned posts in Announcements are authoritative for their date. Plugin support threads are the right place for plugin behaviour. Everything else is user posts: check the post date and the version the poster mentions, and expect answers from the 6.x era to be partly wrong on 7.x (ZFS, pools in the array, Internal Boot, the API, the new Community Apps submission flow all arrived later).
+
+**5. Blogs, videos, Reddit, AI summaries.** Lowest trust. Use them to discover that a feature exists, then confirm it in sources 1 and 2.
+
+## 3. How to fetch
+
+- Official docs pages and GitHub raw files: fetch them directly and read the text. Prefer the release-notes page for the installed version over a general guide.
+- Searching: restrict to `docs.unraid.net` or `forums.unraid.net` when possible, and include the version number in the query ("7.3 mover settings").
+- Forum pages are large; fetch the specific topic URL rather than a search page, and look for the first post and the newest posts.
+- Do not download and run anything from these sources. Read, then apply by hand with the usual backups and consent rules.
+
+## 4. Before acting on what you found
+
+1. Does the procedure name files, pages or commands? Confirm each exists on this server (source 1).
+2. Does it touch `/boot/config`, the array, pools, boot parameters or disk assignments? Apply the consent and backup rules from the `unraid` guide regardless of what the source says.
+3. Does it describe a USB-boot system while this one is Internal Boot, or the reverse? Boot-device procedures differ (FAT versus ZFS, syslinux versus GRUB); do not mix them.
+4. Was it written for a different major.minor? Read the release notes in between and look for the feature's name.
+5. Can you verify the outcome with a read-only check afterwards? Decide what that check is before you start.
+
+## 5. Record what you verified
+
+When you confirm something version-specific, note it where the next session will find it: the installed version, the date, the source, and what was confirmed or contradicted. Phrase it so a later reader on a newer version knows it needs re-checking, for example "verified on 7.3.3 (2026-10-23): udev rules in /boot/config/udev are copied at boot by rc.S.cont". If a Steward skill turned out to be wrong for this version, say so to the owner and suggest updating the skill rather than working around it silently.
+]]></INLINE>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/steward/skills/unraid-health/SKILL.md">
+<INLINE><![CDATA[
+---
+name: unraid-health
+description: Run a read-only health check of an Unraid server (array, parity, disks and SMART, pools, boot device, memory, log partition, Docker, recent errors) and report it as a short table. Use when asked how the server is doing, before risky maintenance, or when something feels slow or wrong.
+metadata:
+  skill-version: "2026.10.23"
+  unraid-verified: "7.3.3"
+  unraid-applies: "7.x"
+---
+
+# Unraid health check
+
+Everything here is read-only. None of these commands change state, spin up sleeping disks, or need consent. Run them all, then report in the format at the end.
+
+**Version check first:** `cat /etc/unraid-version`. The field names in `var.ini` and `disks.ini` below were verified on 7.3.3. On another major version, confirm a field exists (`grep -c '^mdState=' /var/local/emhttp/var.ini`) before reading it, and consult the `unraid-docs` skill if it does not.
+
+## 1. Array and parity
+
+```
+grep -E '^(mdState|fsState|mdNumDisks|mdNumInvalid|mdNumMissing|mdNumDisabled|mdResync|mdResyncAction|mdResyncPos|mdResyncSize|mdResyncDt|mdResyncDb|sbSynced|sbSyncErrs|sbSyncExit|shareMoverActive)=' /var/local/emhttp/var.ini
+```
+
+- Healthy: `mdState=STARTED`, `fsState=Started`, and no degraded slot in section 2. Do not judge degradation from `mdNumInvalid`/`mdNumDisabled`/`mdNumMissing`: an empty parity slot raises those counters on a healthy array. `/proc/mdstat` holds the same `key=value` data if `var.ini` is stale.
+- Parity check or rebuild in progress: `mdResync` greater than 0. Progress is `mdResyncPos / mdResyncSize`; `mdResyncAction` tells check versus rebuild, and `P` or `Q` means which parity.
+- Last parity check: `sbSynced` is its start and `sbSynced2` its end, both Unix timestamps (`date -d @<value>`); `sbSyncErrs` is the error count, `sbSyncExit` the exit code (0 means it finished). A `sbSyncErrs` above 0 is worth flagging even if everything else looks fine.
+- `fsNumUnmountable` above 0: a disk or pool did not mount; section 2 shows which.
+- `shareMoverActive=yes`: the mover is running, which explains disk activity and slow shares.
+
+## 2. Disks
+
+```
+awk -F= '/^\[/{d=$0} /^(device|status|color|rotational|temp|numErrors|fsStatus|fsFree|fsSize|spundown|warning|critical)=/{print d, $0}' /var/local/emhttp/disks.ini
+```
+
+- Judge each slot the way the webGUI does, from `status` and `color` together. `status=DISK_OK` with `color=green-on` is good. A `status` containing `_MISSING`, `DISK_DSBL` or `DISK_INVALID`, or a `color` starting with `red-` or `yellow-`, is a missing, disabled or emulated disk: the array is degraded, say so first. `status=DISK_NP_DSBL` with `color=grey-off` and an empty `device` is simply an unused slot (typically a second parity slot) and is not a problem.
+- `numErrors` above 0: read errors seen by the md driver since boot. Check syslog for `md: disk<N> read error` and look at SMART.
+- `temp` is Celsius; `*` means spun down. Thresholds are in `[display]` of `/boot/config/plugins/dynamix/dynamix.cfg`: `hot`/`max` for spinning disks (defaults 45/55) and `hotssd`/`maxssd` for SSD and NVMe (defaults 60/70); pick the pair from `rotational=` in `disks.ini`. A non-empty `warning`/`critical` on a disk overrides the global values for that disk. Read the thresholds before calling any temperature high.
+- `fsStatus=Mounted` for every data disk and pool when the array is started. `Unmountable` is a problem, usually a filesystem that needs a check from the webGUI (Main -> disk -> Check Filesystem), never from the shell.
+- Free space: compute `fsFree / fsSize` per disk. Flag anything under 5 percent; the share `floor` setting can make writes fail before 0.
+
+**SMART, without waking sleeping disks.** `emhttpd` already keeps a recent SMART report per slot in `/var/local/emhttp/smart/<slot>`; read those first:
+
+```
+for f in /var/local/emhttp/smart/*; do echo "== $f ($(stat -c %y "$f" | cut -c1-16))"; command grep -E 'overall-health|SMART Health|Reallocated_Sector|Reported_Uncorrect|Current_Pending|Offline_Uncorrectable|UDMA_CRC|Percentage Used|Media and Data|Temperature' "$f"; done
+```
+
+Only for a device with no cached report, query it directly with `smartctl -n standby -H -A /dev/sdX`: `-n standby` prints a short notice and skips a disk that is spun down; report it as "not checked (spun down)" rather than waking it. `sdspin sdX status` (exit code 2 = spun down) or `hdparm -C /dev/sdX` shows the power state without touching the platters. The attributes to watch: 5 Reallocated, 187 Reported Uncorrectable, 197 Current Pending, 198 Offline Uncorrectable (any increase is bad), 199 UDMA CRC (cabling), and for NVMe "Percentage Used" and "Media and Data Integrity Errors".
+
+## 3. Pools
+
+```
+zpool status -x 2>/dev/null; zpool list -o name,size,alloc,free,cap,health 2>/dev/null
+btrfs filesystem show 2>/dev/null
+for p in /mnt/*/; do case "$p" in /mnt/user/|/mnt/user0/|/mnt/disk*/|/mnt/addons/|/mnt/remotes/|/mnt/rootshare/) ;; *) btrfs device stats "$p" 2>/dev/null | grep -v ' 0$';; esac; done
+```
+
+- ZFS: `all pools are healthy` is the answer you want. Anything else, show `zpool status` for that pool and say whether a scrub is running or a device is faulted.
+- btrfs: `btrfs device stats` lines that are not zero are accumulated errors; corruption and generation errors matter most.
+- Capacity: a pool above 90 percent slows down and can stall Docker and VMs if appdata or the Docker image lives there.
+
+## 4. Boot device, memory, log partition
+
+```
+df -h /boot /var/log /
+free -m
+uptime
+ls -laS /var/log | head -n 5
+```
+
+- `/var/log` is a small RAM filesystem. Above 80 percent, find what is filling it (the `ls -laS` line) before it hits 100 and services start failing silently.
+- `/` (RAM root) filling up usually means something is writing to a path that is not under `/mnt` or `/boot`, often a container with a bad volume mapping or downloads going to `/tmp`.
+- Memory: Unraid uses free RAM as page cache, so low "free" is normal; look at `available` and at swap (there usually is none). A ZFS ARC can hold a large share; `awk '/^(size|c_max) /{printf "%s %.1f GiB\n", $1, $3/1073741824}' /proc/spl/kstat/zfs/arcstats` shows its current size and cap (there is no `arc_summary` on Unraid).
+- Load average far above the core count with no parity check running points at a stuck process on `/mnt`; `ps -eo pid,stat,wchan:20,cmd | grep ' D '` lists processes in uninterruptible wait.
+
+## 5. Docker and VMs
+
+```
+docker ps -a --format 'table {{.Names}}\t{{.Status}}' 2>/dev/null
+docker stats --no-stream --format 'table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}' 2>/dev/null
+df -h /var/lib/docker 2>/dev/null
+docker system df 2>/dev/null
+virsh list --all 2>/dev/null
+```
+
+- Containers that show `Restarting`, `Exited (non-zero)` or `Created` (never started, or failed to start) are the ones to look at: `docker logs --tail 50 <name>`.
+- `df -h /var/lib/docker` is the fill level of the Docker image or directory (its size is set in Settings -> Docker). Above 80 percent, say so; the fix is the owner's (bigger image, or a container writing inside itself). `docker system df` only tells what is reclaimable.
+
+## 6. Recent errors in the log
+
+```
+grep -iE 'error|fail|warn|call trace|oom|read error|segfault' /var/log/syslog | grep -viE 'steward|audit|ntpd' | tail -n 40
+```
+
+Group what you find by subsystem (md, filesystem, network, docker, kernel). Do not paste raw log walls; quote the two or three lines that explain a problem and say when they happened.
+
+## 7. Report format
+
+Lead with the verdict in one line: "All healthy", or "Attention: <the one or two things that matter>". Then a table:
+
+| Area | State | Note |
+|---|---|---|
+| Array | STARTED, 0 invalid/missing | last parity check <date>, 0 errors |
+| Disks | all DISK_OK, max 38 C | disk3 at 92 percent full |
+| SMART | no reallocated/pending sectors | disk5 spun down, not checked |
+| Pools | cache: healthy, 61 percent | |
+| Boot / logs | /boot 28G free, /var/log 12 percent | |
+| Memory / load | 9.1G available, load 0.8 | |
+| Docker / VMs | 14 running, 1 exited | nginx exited (1) 2 h ago |
+| Syslog | 3 warnings | all from ntpd, harmless |
+
+Finish with the actions you recommend, each marked as "I can do this now", "needs your OK", or "webGUI only". Do not start any of them inside the health check.
+]]></INLINE>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/steward/skills/unraid-tools/SKILL.md">
+<INLINE><![CDATA[
+---
+name: unraid-tools
+description: Which command-line tools exist on a stock Unraid server and which do not, with full paths for the Unraid-specific ones, so you can pick a working tool instead of probing for it. Use when deciding how to parse, fetch, inspect or script something, and before assuming a tool such as python, nc or tmux is present.
+metadata:
+  skill-version: "2026.10.23"
+  unraid-verified: "7.3.3"
+  unraid-applies: "7.x"
+---
+
+# Tools available on Unraid
+
+Unraid is a Slackware-based appliance. The installed tool set is fixed by the release, lives in RAM, and cannot be extended persistently with a package manager. What is listed as present below was checked with `command -v` on Unraid 7.3.3. On another version, a quick `command -v <tool>` settles it; the installed package list is `ls /var/log/packages`.
+
+## Present and safe to rely on
+
+**Shell and text.** `bash` 5.3 (`/bin/sh` is bash), GNU coreutils, `gawk` (as `awk`), GNU `sed`, GNU `grep` 3.12 (with `-P`) and `pcregrep`, `find`, `xargs`, `sort`, `diff`, `patch`, `less`, `nano`, `vi` (which is `elvis`, not vim), `file`, `fromdos`/`todos` (no `dos2unix`), `base64`, `md5sum`/`sha256sum`, `openssl`, `timeout`, `flock`, `setsid`, `nohup`, `watch`, `logger`.
+
+**About `grep` inside Claude Code.** In Claude Code's Bash tool, plain `grep` is a shell function that runs a bundled `ugrep`, not GNU grep. It rejects moderately complex patterns ("exceeds complexity limits"), skips binary files, and honours ignore files. For `-P`, long alternations, binary files (`-a`) or anything that behaves oddly, call GNU grep explicitly: `command grep ...` or `/bin/grep ...`.
+
+**Data formats.** `jq` 1.8 for JSON, `xmllint` for XML (validate with `xmllint --noout`, query with `--xpath`), `php` 8.4 CLI (the webGUI language, handy for INI parsing: `php -r '$v = parse_ini_file("/var/local/emhttp/var.ini"); echo $v["mdState"], "\n";'`; never dump `var.ini` whole, it contains `csrf_token` and registration GUIDs), `perl` 5. `node` 22 and `npm` are present because the built-in Unraid API ships them (they arrive with the `dynamix.unraid.net` package, not as a Slackware package); fine for one-off scripts, but not something to build on for older versions.
+
+**Archives.** `tar`, `gzip`, `bzip2`, `xz`, `zstd`, `lz4`, `zip`/`unzip`, `cpio`. No `7z`, no `pigz`.
+
+**Network.** `curl` 8 (with HTTPS), `wget`, `ssh`/`scp`/`rsync`, `ip`, `ss`, `netstat`, `ping`, `traceroute`, `dig`/`nslookup`/`host`, `ethtool`, `arp`, `iptables`, `wg` (WireGuard), `avahi-browse`, `smbclient`, `showmount`. Nothing for packet capture or port scanning.
+
+**Disks and filesystems.** `lsblk`, `blkid`, `smartctl` 7.5 (`-n standby` to avoid waking disks), `hdparm`, `sdparm`, `nvme`, `zpool`/`zfs` 2.4, `btrfs` 7, `xfs_info`, `xfs_repair`, `cryptsetup`, `lsof`, `fuser`, `df`, `du`. The destructive ones (`mkfs.*`, `wipefs`, `sgdisk`, `fdisk`, `parted`, `xfs_repair` without `-n`) also exist; they are never to be used by you, and the shipped bash-guard hook blocks the worst of them.
+
+**System.** `htop`, `top`, `iotop`, `iostat`, `vmstat`, `free`, `uptime`, `sensors`, `lscpu`, `lspci`, `lsusb`, `dmidecode`, `mcelog`, `at`, `crontab` (but see cron below).
+
+**Containers and VMs.** `docker` 29 (no `docker compose` plugin by default), `containerd`, `runc`, `virsh`, `qemu-img`.
+
+**Version control.** `git` 2.56. No `gh`.
+
+## Unraid-specific commands
+
+On `PATH` (`/usr/local/sbin`, `/usr/local/bin`):
+
+| Command | What it is | Notes |
+|---|---|---|
+| `mdcmd` | array driver control | `mdcmd status` is read-only; anything else changes array state and needs consent. Prefer reading `/proc/mdstat` or `var.ini`. |
+| `emcmd` | send a command to `emhttpd` the way the GUI does | Same caution as `mdcmd`. |
+| `plugin` | plugin manager | `plugin install <file or URL>`, `plugin check <name>.plg`, `plugin remove <name>.plg`, `plugin update <name>.plg`. Installing or removing plugins needs consent. |
+| `unraid-api` | the GraphQL API CLI (7.2 and later) | `unraid-api --help`; API keys via `unraid-api apikey`. |
+| `diagnostics` | builds the diagnostics zip into `/boot/logs/` | Read-only; takes a minute. |
+| `mover` | the mover | `mover status` is safe; `mover start` moves data and should be the owner's call. |
+| `update_cron` | rebuilds the single crontab `/etc/cron.d/root` from `/boot/config/plugins/dynamix/*.cron` and the `.cron` files of installed plugins | Run after adding a `.cron` file. Anything else in `/etc/cron.d` is discarded. |
+| `newperms` | the "New Permissions" tool | Recursive chown/chmod; owner only. |
+| `sdspin` | Unraid's spin state helper: `sdspin sdX status` (exit 2 = spun down, ATA only), `sdspin sdX up|down` | Status is safe; up/down changes state. |
+| `powerdown` | deprecated wrapper around `/sbin/init 0` (`-r` reboots) | All shutdown commands end in `/etc/rc.d/rc.6`, which stops the array and runs `/boot/config/stop`. Consent required; prefer the webGUI. |
+
+Not on `PATH`, call by full path (`webGui` is a symlink to `plugins/dynamix`, so both spellings reach the same scripts):
+
+| Path | Purpose |
+|---|---|
+| `/usr/local/emhttp/webGui/scripts/notify` | create an Unraid notification: `notify -e "Steward" -s "<subject>" -d "<text>" -i normal` |
+| `/usr/local/emhttp/webGui/scripts/parity_control` | pause/resume a running parity check (`pause`, `resume`); consent required |
+| `/usr/local/emhttp/webGui/scripts/flash_backup` | the Main -> Flash "Flash backup" button: zips the whole boot device, by default into `/` (RAM); owner's tool, the zip contains secrets |
+| `/usr/local/emhttp/webGui/scripts/reload_services` | internal helper: runs service `update` steps only when the webGUI queued a job with `at`; a no-op otherwise, so not a way to apply hand edits |
+| `/usr/local/emhttp/plugins/dynamix/scripts/manage_boot_params.sh` | boot parameters (Internal Boot and USB); consent required, never edit grub.cfg by hand |
+
+To apply a hand edit: `/etc/rc.d/rc.samba reload` after `smb-extra.conf`, `/etc/rc.d/rc.nfsd reload` for NFS exports. Share settings (`shares/*.cfg`) have no command-line reload; they are webGUI only.
+
+The rest of `/usr/local/emhttp/webGui/scripts/` are the scripts behind GUI buttons. Read them before using them; most assume the GUI's context.
+
+## Absent (do not try)
+
+`python`/`python3`, `ruby`, `lua`, `bc`, `yq`, `xmlstarlet`, `dos2unix`, `vim` (use `nano` or `elvis`), `tmux`/`screen`, `nc`/`netcat`, `nmap`, `tcpdump`, `mtr`, `nft`, `strace`, `gdb`, `shellcheck`, `gh`, `ncdu`, `docker-compose`, `virt-install`, `sshpass`, `strings`.
+
+Needs that would normally call for one of these:
+
+- Arithmetic: bash `$(( ))`, `awk`, or `jq -n`.
+- YAML: there is no parser; treat it as text, or use `node` with care.
+- Text extraction from binaries: `grep -a` or `od`.
+- Terminal multiplexing or detaching a long job: `setsid nohup <cmd> >log 2>&1 &`, or `at`.
+- Port checks: `curl -sS --connect-timeout 3 host:port`, `ss -ltnp`, or `bash -c '</dev/tcp/host/port'`.
+- Downloading and running tools: a static binary dropped under `/usr/local/bin` works until reboot. Persisting it means a `go` entry or a plugin, which is the owner's decision. Community plugins (NerdTools, un-get) add packages the same way.
+
+## Things that behave differently from a desktop Linux
+
+- `cron`: dcron. `update_cron` writes one crontab, `/etc/cron.d/root`, from the `.cron` files under `/boot/config/plugins/`; other files in `/etc/cron.d` and `crontab -e` edits are lost on the next run or reboot.
+- `sudo` exists but you are already root; there are no other interactive users by default.
+- No `systemctl`. Services are `/etc/rc.d/rc.<name> start|stop|restart|status`.
+- `/tmp`, `/var/log`, `/root`, `/usr/local/bin` are RAM. `/boot` and `/mnt` are the only places that persist.
+- Locales: `C`, `POSIX` and `en_US.UTF-8` only. `C.UTF-8` does not exist, and a shell that exports it makes `perl` and `virsh` print locale warnings. Use `LANG=en_US.UTF-8` for UTF-8 work.
+- `/proc/mdstat` is Unraid's `key=value` array status, not the standard Linux md format.
+- Docker's data root is a loopback image or directory on a pool (see `/boot/config/docker.cfg`), mounted at `/var/lib/docker`; `df -h /var/lib/docker` shows how full it is.
+]]></INLINE>
+</FILE>
+
+<FILE Name="/usr/local/emhttp/plugins/steward/skills/unraid/SKILL.md">
+<INLINE><![CDATA[
+---
+name: unraid
+description: Operating guide for working as a root admin assistant on an Unraid server. Use whenever a task touches the array, pools, shares, Docker, VMs, /boot/config, boot parameters, notifications, logs or the Unraid API, before deciding how to do it or whether to ask first.
+metadata:
+  skill-version: "2026.10.23"
+  unraid-verified: "7.3.3"
+  unraid-applies: "7.2 - 7.3"
+---
+
+# Unraid operating guide
+
+You are running directly on the host as root. There is no container around you. Everything here is about doing the job without breaking the array, losing data, or leaving the server in a state the owner cannot recover from remotely.
+
+## 0. Check the version first
+
+This guide was verified on Unraid 7.3.3 and is written for 7.2 through 7.3. Before relying on it:
+
+```
+cat /etc/unraid-version
+```
+
+If the installed version is outside that range, or newer than the `unraid-verified` value above, treat every path, file name and GUI location here as a hypothesis: confirm it on the machine or in the release notes with the `unraid-docs` skill before acting. Things known to differ in older releases: no Unraid API before 7.2, no `go.safemode` or `/boot/config/udev` handling before 7.2, no Internal Boot on 6.x.
+
+## 1. How the system is put together
+
+**Root filesystem lives in RAM.** Unraid boots from the boot device, unpacks the OS into RAM, and runs from there. Anything you change outside `/boot` and `/mnt` is gone at the next reboot: packages, files in `/etc`, `/usr`, `/root`, cron entries, users. Persistent configuration has two homes:
+
+- `/boot/config/`: Unraid's own configuration. Read at boot, partly rewritten by the webGUI.
+- `/boot/config/go`: a shell script run late in boot. The traditional place to re-apply customisations. There is also `go.safemode` (run instead of `go` in safe mode) and `stop` (run at shutdown).
+
+**The boot device.** Either a USB stick (FAT, `/boot` mounted with limited permissions) or, on newer systems, Internal Boot (a ZFS pool mounted at `/boot`). Check with `stat -f -c %T /boot`. It is small and stays mounted when the array is stopped. Do not fill it with large files.
+
+**Array, pools, shares.**
+
+- The *array* is the parity-protected set of data disks: `/mnt/disk1`, `/mnt/disk2`, ... with up to two parity disks that have no mount point.
+- *Pools* (cache and others) are separate devices or groups: `/mnt/<poolname>`. They can be btrfs, XFS or ZFS.
+- *User shares* are the merged view at `/mnt/user/<share>`: one directory tree that spans the disks and pools included in that share. Files physically live on exactly one disk or pool; the share view is a FUSE overlay.
+- The *mover* moves files between a pool and the array on a schedule according to each share's cache setting.
+
+The single most important data rule: **never mix `/mnt/user/...` and `/mnt/diskN/...` (or `/mnt/<pool>/...`) in one copy or move command.** The user-share view and the underlying disk can refer to the same file; copying between them can truncate it to zero bytes. Pick one namespace per command.
+
+**Array state.** `/var/local/emhttp/var.ini` is the live state file written by `emhttpd`. The lines that matter:
+
+```
+grep -E '^(mdState|fsState|mdResync|mdResyncAction|mdResyncPos|mdResyncSize|mdNumInvalid|mdNumMissing|mdNumDisabled|sbSynced|sbSyncErrs|shareMoverActive)=' /var/local/emhttp/var.ini
+```
+
+- `mdState=STARTED` and `fsState=Started`: array up, shares mounted.
+- `mdState=STOPPED`: `/mnt/user`, `/mnt/disk*` and pools are gone; Docker and VMs are down.
+- `mdResync` greater than 0: a parity check or rebuild is running; `mdResyncAction` says which, `mdResyncPos`/`mdResyncSize` give progress.
+- Whether the array is *degraded* is decided per slot in `disks.ini`, the same way the webGUI does it: a `status` containing `_MISSING`, `DISK_DSBL` or `DISK_INVALID`, or a `color` starting with `red-` or `yellow-`, means a missing, disabled or emulated disk. Say so before doing anything else. Do not use the `mdNumInvalid`/`mdNumDisabled`/`mdNumMissing` counters for this: an empty parity slot (`status=DISK_NP_DSBL`, `color=grey-off`, no `device`) raises them on a perfectly healthy array.
+- `/proc/mdstat` on Unraid is not the usual Linux format; it is the same `key=value` list as the `md*`/`sb*` keys in `var.ini`.
+
+Other state files in `/var/local/emhttp/`: `disks.ini` (per-disk device, temperature, error counts, filesystem, free space, and the GUI `color`: `green-on` normal, `grey-off` empty or spun-down slot, `blue-*` new, `yellow-*` emulated or warning, `red-*` disabled or error), `shares.ini` (per-share settings and usage), `network.ini`, `users.ini`, and a cached SMART report per slot in `smart/<slot>`. They are INI files; read them with `grep`/`awk`, do not write them.
+
+**The webGUI and emhttpd.** The webGUI (`/usr/local/emhttp`, nginx + PHP) talks to `emhttpd`, which owns the array. Starting or stopping the array, assigning disks, formatting, parity operations and share settings all go through it. Scripts that back the GUI live in `/usr/local/emhttp/webGui/scripts/` and `/usr/local/emhttp/plugins/dynamix/scripts/`; a few are safe and useful from the shell (see section 6).
+
+## 2. What you must never do, and what needs consent
+
+**Never, under any instruction:**
+
+- New Config, clearing or formatting a disk, `mkfs`, `wipefs`, `sgdisk --zap`, `blkdiscard`, `zpool destroy`, `zpool labelclear`. The owner does these in the webGUI, deliberately.
+- Edit `/boot/config/super.dat`, `disk.cfg`, `pools/`: these are the disk assignments. A wrong edit means the array will not start or parity is rebuilt over good data.
+- Read or print password hashes, keys, tokens, WireGuard private keys, API keys. The conversation is stored in plain text and synced off the machine.
+- Stop the array with `mdcmd stop` or unmount disks by hand. If the array must stop, the owner does it from Main.
+- Edit `/boot/grub/grub.cfg` or create `/boot/syslinux/syslinux.cfg` on an Internal Boot system. Boot parameters go through Main -> Flash -> Boot Parameters (backed by `manage_boot_params.sh`). The GUI's CPU-pinning code, the OS updater and `diagnostics` all look for `/boot/syslinux/syslinux.cfg` first and fall back to `grub.cfg`; a stray `syslinux.cfg` makes them write kernel options into a file GRUB never reads.
+
+**Explain the impact and get an explicit yes, one action at a time:**
+
+- Starting or stopping the array; rebooting or shutting down.
+- Starting, pausing or cancelling a parity check; any rebuild.
+- Changing disk assignments, adding or removing pool devices.
+- Deleting a container, VM, share or appdata directory; removing a plugin.
+- Updating Unraid itself or any plugin.
+- Anything that writes under `/boot/config` (back it up first, see section 3).
+- Running a scrub or balance on a pool (long, I/O heavy).
+
+For everything else, prefer the read-only check first, then the smallest change that does the job.
+
+## 3. Changing configuration
+
+**Back up before you touch `/boot/config`.** Copy the file to `/boot/steward/backups/<YYYYMMDD-HHMMSS>/` keeping the relative path, then edit. Tell the owner what changed, how to restore it, and whether a service restart or reboot is needed.
+
+**Three tiers of files under `/boot/config`:**
+
+| Tier | Files | How to change |
+|---|---|---|
+| Meant for hand editing | `go`, `go.safemode` (optional), `stop`, `udev/*.rules`, `modprobe.d/*.conf`, `smb-extra.conf`, `network-extra.cfg`, `editor.cfg`; with the third-party User Scripts plugin also `plugins/user.scripts/scripts/` | Edit with a backup. Unraid reads them; the webGUI does not rewrite them. |
+| Rewritten by the webGUI | `ident.cfg`, `network.cfg`, `share.cfg`, `shares/*.cfg`, `docker.cfg`, `domain.cfg`, `plugins/dockerMan/templates-user/my-*.xml`, `plugins/dynamix/dynamix.cfg`, `plugins/dynamix/monitor.ini`, `plugins/dynamix/*.cron` | Use the webGUI when there is a page for it. A hand edit works until the next Apply on that page, and it does not take effect until the matching service reloads. `shares/*.cfg` has no command-line reload at all: share settings are webGUI only. |
+| Never by hand | `super.dat`, `disk.cfg`, `pools/`, `passwd`, `shadow`, `smbpasswd`, `secrets.tdb`, `ssh/`, `ssl/`, `wireguard/`, `*.key`, `machine-id`, `network-rules.cfg` | Only through the webGUI, or not at all. |
+
+Notes:
+
+- `rc.local` runs `go` through `fromdos` first, so Windows line endings are tolerated there. Other files are not so forgiving.
+- Unraid's `rc.local` may itself rewrite `go` (it strips certain lines and leaves `go~` behind). A change to `go` in the Flash Backup history is not necessarily human.
+- Scripts kept on `/boot` should be run as `bash /boot/path/script.sh` rather than relying on the execute bit.
+- Cron: drop a file into `/boot/config/plugins/dynamix/<name>.cron` and run `/usr/local/sbin/update_cron`. It concatenates those files (plus the `.cron` files of installed plugins) into the single crontab `/etc/cron.d/root`, so anything else placed in `/etc/cron.d` is discarded on the next run, and `crontab -e` edits RAM.
+
+**Services.** Most are SysV-style under `/etc/rc.d/`: `rc.samba`, `rc.nfsd`, `rc.docker`, `rc.libvirt`, `rc.nginx`, `rc.sshd`, `rc.ntpd`, `rc.avahidaemon`. Use `restart` or `reload` sparingly and say which clients will be interrupted. After editing `smb-extra.conf` by hand, `/etc/rc.d/rc.samba reload` regenerates the Samba configuration and reloads it without dropping sessions; `/etc/rc.d/rc.nfsd reload` does the same for NFS exports. `/usr/local/emhttp/webGui/scripts/reload_services` is not a general reload: it only runs when the webGUI has queued a job with `at`, and does nothing otherwise.
+
+## 4. Docker
+
+Containers on Unraid are defined by templates: `/boot/config/plugins/dockerMan/templates-user/my-<name>.xml`. The webGUI builds the `docker run` from the template, and only containers with a template can be edited, updated or re-created from the Docker page.
+
+- Do not create long-lived containers with `docker run` by hand. They will work, but they have no template, so the owner cannot manage them in the webGUI and they are lost on the next "update all". Create them in the webGUI (Add Container, or Community Applications) or write a template and let the owner apply it.
+- Read-only inspection is fine and useful: `docker ps -a`, `docker logs --tail 200 <name>`, `docker inspect <name>`, `docker stats --no-stream`, `docker image ls`, `docker system df`.
+- Starting, stopping and restarting a container is a routine operation: `docker start|stop|restart <name>`. Say what depends on it first (reverse proxy, databases).
+- Removing containers, images, volumes or networks needs consent. `docker system prune` and `docker volume rm` destroy data.
+- Updates: the Docker page's "check for updates" and Community Applications handle image updates so the template stays in sync. `docker pull` by hand leaves the webGUI showing stale state.
+- appdata lives in the share set by `docker.cfg` (usually `/mnt/user/appdata` on a pool). Treat it as the container's database: back it up before changing it, never `chmod -R` it.
+- The Docker image or directory itself (`docker.cfg`: `DOCKER_IMAGE_FILE`) must not be deleted or resized by hand.
+
+## 5. Virtual machines
+
+libvirt manages VMs; definitions are in `/etc/libvirt/qemu/*.xml`, persisted to the libvirt image on the pool. `virsh list --all`, `virsh dominfo <vm>`, `virsh domstats <vm>` are safe. `virsh shutdown <vm>` is a graceful request and acceptable with consent; `virsh destroy <vm>` is a hard power-off and `virsh undefine <vm>` deletes the definition: both need explicit consent. VM disks (vdisks) live under the domains share; never delete or shrink them.
+
+## 6. Useful commands that are safe
+
+```
+cat /etc/unraid-version                                   # OS version
+grep -E '^(mdState|fsState)=' /var/local/emhttp/var.ini   # array state
+df -h /boot /var/log                                      # boot device and the RAM log partition
+free -m; uptime                                           # memory, load
+zpool status; zpool list                                  # ZFS pools (if any)
+btrfs filesystem show; btrfs device stats /mnt/<pool>     # btrfs pools
+smartctl -n standby -H -A /dev/sdX                        # SMART without spinning up a sleeping disk
+tail -n 200 /var/log/syslog                               # system log (RAM; the previous boot's log is /boot/logs/syslog-previous)
+diagnostics                                               # anonymised diagnostics zip into /boot/logs (never -a without the owner)
+command grep -P '...' file                                # GNU grep; plain "grep" inside Claude Code is a ugrep shim with pattern limits
+/usr/local/emhttp/webGui/scripts/notify -e "Steward" -s "<subject>" -d "<text>" -i normal   # Unraid notification
+```
+
+Things that look harmless but are not:
+
+- `mdcmd` anything: it is the array control interface. Even `mdcmd status` is fine, but it is simpler to read `/proc/mdstat` or `var.ini`. Never `mdcmd stop`, `mdcmd nocheck`, `mdcmd check` without consent.
+- `smartctl` without `-n standby` spins up sleeping disks. `hdparm -C /dev/sdX` shows the power state without waking it.
+- `du` or `find` across `/mnt/user` spins up every disk and can take hours. Ask before scanning whole shares; prefer `shares.ini` for usage numbers.
+- A shell whose working directory is under `/mnt` prevents the array from stopping. Use absolute paths and keep `cd` out of `/mnt`.
+
+## 7. Files you create on shares
+
+New files under `/mnt/user/...` are owned by root and SMB users cannot open them. After creating files there: `chown nobody:users <files>` and `chmod ug+rw <files>`, only on the files you created. Never run `chown -R` or `chmod -R` on appdata, system, domains or a whole share; the Unraid "New Permissions" tool exists for that and the owner runs it. Avoid `cp -a`/`rsync -a` from root-owned sources into shares for the same reason.
+
+## 8. Logs and diagnostics
+
+- `/var/log/syslog` is in RAM and limited in size. If `/var/log` is full (`df -h /var/log`), something is logging in a loop; find it with `ls -laS /var/log` before anything else.
+- By default the syslog is copied to the boot device at shutdown and shows up as `/boot/logs/syslog-previous` after the next boot. Continuous mirroring to the boot device or a remote server is a separate setting under Settings -> Syslog Server.
+- `diagnostics` writes `/boot/logs/<host>-diagnostics-<date>.zip`. The default run anonymises IPs, user names and registration data; `diagnostics -a` does not. Tell the owner before sending it anywhere.
+- Container logs: `docker logs`. VM logs: `/var/log/libvirt/qemu/<vm>.log`. Mover: enable mover logging in Settings -> Scheduler, then grep syslog for `move:`.
+- When a report says "disk error", look at `disks.ini` `numErrors` and the SMART attributes (5, 187, 197, 198, 199) before concluding anything. Read errors during a parity check are logged as `md: disk<N> read error` lines.
+
+## 9. The Unraid API
+
+Unraid 7.2 and later include a GraphQL API with a CLI: `unraid-api --help`. Docs: https://docs.unraid.net/API/. Creating an API key is `unraid-api apikey --create`: ask the owner first, use the narrowest role that works, store the key at `/boot/steward/home/unraid-api.key` with mode 600, and never print it. The API is the right tool when you need structured data (array, disks, shares, containers, notifications) rather than parsing INI files.
+
+## 10. Reporting back
+
+Lead with the state that matters (array degraded, disk errors, pool near full), then what you did, then what you did not do and why. For anything long-running or anything that now needs a decision, send an Unraid notification so the owner sees it without opening the conversation. Keep numbers in a short table. Say plainly when something could not be verified.
+]]></INLINE>
+</FILE>
+
+<!-- 7. Install (also runs on every boot) -->
 <FILE Run="/bin/bash">
 <INLINE><![CDATA[
 # Reached on every boot (then it only prepares; the service starts in the background) and when installing or updating from the webGUI
@@ -1842,7 +2388,7 @@ bash /usr/local/emhttp/plugins/steward/scripts/steward.sh _plugin_install
 ]]></INLINE>
 </FILE>
 
-<!-- 7. Remove: stop the service and take out the hooks. Data in /boot/steward is kept -->
+<!-- 8. Remove: stop the service and take out the hooks. Data in /boot/steward is kept -->
 <FILE Run="/bin/bash" Method="remove">
 <INLINE><![CDATA[
 exec 2>&1

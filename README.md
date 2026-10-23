@@ -128,6 +128,25 @@ Claude Code's own permission rules match the start of a command. The hook looks 
 
 Known limits, by design: it matches text, so a harmless command that merely mentions a keyword (for example `echo rm`) is also asked about; and it does not look inside scripts that a command executes. Treat it as a second line of defence behind `settings.json`, not as a sandbox. There is no isolation: Claude runs as root on the host.
 
+## Optional skills
+
+Steward can also give Claude written guides, as Claude Code skills. None are installed by default: a fresh install is the service, the guardrails and nothing else. Install the ones you want:
+
+```
+steward skills list              # what is available: skill version, Unraid version it was verified on, range it applies to
+steward skills install unraid    # one or more names
+steward skills remove unraid     # removes the skill and any backups kept next to it
+```
+
+| Skill | What Claude gets |
+|---|---|
+| `unraid` | How Unraid is put together (RAM root, boot device, array, pools, user shares), what must never be done, what needs your consent, how to change configuration safely, Docker and VM conventions, logs, the API. |
+| `unraid-docs` | Where to find correct information for the installed version and how to tell outdated advice apart: the machine's own help text and scripts first, then docs.unraid.net and release notes, then forums. |
+| `unraid-tools` | Which command-line tools exist on a stock Unraid and which do not, with full paths for the Unraid-specific ones. |
+| `unraid-health` | A read-only health check (array, parity, SMART, pools, boot device, memory, log partition, Docker, syslog) and the report format. |
+
+Each skill records the Unraid version it was verified on and the range it is meant for, and tells Claude to check `/etc/unraid-version` before trusting version-specific details. Installed skills are plain Markdown under `/boot/steward/home/skills/<name>/SKILL.md`; edit them freely. `list` tells you when your copy differs from the shipped one, and reinstalling keeps your edited copy as a backup next to the new file. The files are shipped inside the plugin, so listing and installing need no network; a script install (no plugin) fetches them from this repository instead, and `list` may show "not available offline" there.
+
 ## Updates
 
 - **Steward itself** updates through the Plugins page like any other plugin. Your data and configuration are untouched.
