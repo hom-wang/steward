@@ -1,33 +1,41 @@
 #!/bin/bash
-# 跑全部測試。用法：tests/run-all.sh [--quick]（--quick 跳過要幾十秒的煙霧測試）
-# 全部都是安全的：hook 測試只餵 JSON；auto_update 測試全用假依賴；煙霧測試在假根目錄、不啟動服務。
+# Run every test. Usage: tests/run-all.sh [--quick]  (--quick skips the smoke test, which takes tens of seconds)
+# All of it is safe on a live server: the hook test only feeds JSON, the auto_update test uses fake dependencies,
+# and the smoke test runs in a fake root directory and never starts a service.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 dev=$here/..
 rc=0
-step() { echo "── $1"; shift; "$@" || rc=1; echo; }
+step() { echo "-- $1"; shift; "$@" || rc=1; echo; }
 
-step "語法" bash -c "bash -n '$dev/steward.sh' && echo 'steward.sh 語法 OK' && xmllint --noout '$dev/steward.plg' && echo 'steward.plg XML OK'"
+step "syntax" bash -c "bash -n '$dev/steward.sh' && echo 'steward.sh syntax OK' && xmllint --noout '$dev/steward.plg' && echo 'steward.plg XML OK'"
 
-# plg 內嵌的腳本必須和 steward.sh 完全一樣
-step "plg 同步" bash -c '
-  m=$(grep -n "<!-- 5. 主腳本" "'"$dev"'/steward.plg" | cut -d: -f1); s=$((m+2))
+# The script embedded in the plg must be identical to steward.sh
+step "plg sync" bash -c '
+  m=$(grep -n "<!-- 5. Main script" "'"$dev"'/steward.plg" | cut -d: -f1); s=$((m+2))
   e=$(awk -v s=$s "NR>s && /^\]\]><\/INLINE>/ {print NR; exit}" "'"$dev"'/steward.plg")
-  if sed -n "$((s+1)),$((e-1))p" "'"$dev"'/steward.plg" | cmp -s - "'"$dev"'/steward.sh"; then echo "plg 內嵌腳本與 steward.sh 相同"; else echo "plg 內嵌腳本與 steward.sh 不同，請重新同步"; exit 1; fi
-  grep -q "\]\]>" "'"$dev"'/steward.sh" && { echo "steward.sh 含 ]]>，會提早結束 CDATA"; exit 1; }
+  if sed -n "$((s+1)),$((e-1))p" "'"$dev"'/steward.plg" | cmp -s - "'"$dev"'/steward.sh"; then echo "embedded script matches steward.sh"; else echo "embedded script differs from steward.sh; re-sync it"; exit 1; fi
+  grep -q "\]\]>" "'"$dev"'/steward.sh" && { echo "steward.sh contains ]]>, which would end the CDATA early"; exit 1; }
   v1=$(sed -n "s/.*ENTITY version *\"\([^\"]*\)\".*/\1/p" "'"$dev"'/steward.plg"); v2=$(sed -n "s/^STEWARD_VERSION=\"\(.*\)\"/\1/p" "'"$dev"'/steward.sh")
-  [ "$v1" = "$v2" ] && echo "版號一致：$v1" || { echo "版號不一致：plg=$v1 sh=$v2"; exit 1; }'
+  [ "$v1" = "$v2" ] && echo "versions match: $v1" || { echo "version mismatch: plg=$v1 sh=$v2"; exit 1; }'
 
-# dev 內嵌的 hook（write_defaults 裡 HOOK heredoc）
+# Everything in the repo is plain ASCII, apart from the box-drawing dividers and spinner glyphs in steward.sh
+step "ascii only" bash -c '
+  tab=$(printf "\t")
+  found=$(grep -n "[^ -~$tab]" "'"$dev"'/steward.sh" "'"$dev"'/steward.plg" "'"$dev"'/README.md" "'"$dev"'/LICENSE" "'"$dev"'"/tests/* "'"$dev"'"/.github/workflows/* | grep -v "[─⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✔✘]")
+  if [ -n "$found" ]; then printf "%s\n" "$found" | head -n 5 | cut -c1-120; echo "non-ASCII text found (see above)"; exit 1; fi
+  echo "ASCII only, apart from the allowed glyphs"'
+
+# The hook embedded in the dev script (the HOOK heredoc inside write_defaults)
 tmp=$(mktemp /tmp/steward-hook.XXXXXX)
 sed -n "/<<'HOOK'$/,/^HOOK$/p" "$dev/steward.sh" | sed '1d;$d' >"$tmp"
-step "hook（dev 內嵌版）" bash "$here/hook-test.sh" "$tmp"
+step "hook (embedded in dev script)" bash "$here/hook-test.sh" "$tmp"
 rm -f "$tmp"
-[ -f /boot/steward/hooks/bash-guard.sh ] && step "hook（這台已安裝版）" bash "$here/hook-test.sh" /boot/steward/hooks/bash-guard.sh
+[ -f /boot/steward/hooks/bash-guard.sh ] && step "hook (installed on this machine)" bash "$here/hook-test.sh" /boot/steward/hooks/bash-guard.sh
 
-step "auto_update 情境" bash "$here/autoupdate-test.sh" "$dev/steward.sh"
+step "auto_update scenarios" bash "$here/autoupdate-test.sh" "$dev/steward.sh"
 
-[ "${1:-}" = --quick ] || step "煙霧測試（假根目錄）" bash "$here/smoke-test.sh" "$dev/steward.sh"
+[ "${1:-}" = --quick ] || step "smoke test (fake root)" bash "$here/smoke-test.sh" "$dev/steward.sh"
 
-((rc == 0)) && echo "全部通過" || echo "有測試失敗"
+((rc == 0)) && echo "all passed" || echo "some tests failed"
 exit $rc

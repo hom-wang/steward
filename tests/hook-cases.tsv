@@ -1,7 +1,7 @@
-# bash-guard 測試案例：want<TAB>command。want = deny | ask | pass
-# 這個檔案裡有危險字串，只能用檔案餵給 hook-test.sh，不要把內容貼進指令列
-# 已知限制：hook 只做文字比對，像 "echo rm" 這種只是提到關鍵字的也會被問，這是刻意接受的副作用
-# ===== deny：清碟 / 格式化 =====
+# bash-guard test cases: want<TAB>command. want = deny | ask | pass
+# This file contains dangerous strings. Only feed it to hook-test.sh as a file; never paste its contents into a command line.
+# Known limit: the hook matches text, so a command that merely mentions a keyword (like "echo rm") is also asked about. Accepted on purpose.
+# ===== deny: disk wipe / format =====
 deny	mkfs.xfs /dev/sdz1
 deny	/sbin/mkfs.xfs /dev/sdz1
 deny	ls; /usr/sbin/wipefs -a /dev/sdz
@@ -11,7 +11,7 @@ deny	shred -u /tmp/x
 deny	zpool destroy tank
 deny	zpool   labelclear /dev/sdz1
 pass	echo mkfsx
-# ===== deny：密碼雜湊 / 金鑰 / token =====
+# ===== deny: password hashes / keys / tokens =====
 deny	cat /etc/shadow
 deny	cat /etc/shadow-
 deny	cat /etc/shad*
@@ -28,7 +28,7 @@ deny	cat /boot/steward/home/.credentials.json
 deny	cat /boot/claude-code/home/.credentials.json
 deny	jq . /boot/steward/home/unraid-api.key
 deny	tdbdump /var/lib/samba/private/secrets.tdb
-# ===== ask：刪除 / 覆寫 / 陣列 / 關機，任何指令位置 =====
+# ===== ask: delete / overwrite / array control / shutdown, in any command position =====
 ask	rm -rf /tmp/x
 ask	ls; /bin/rm -rf /tmp/x
 ask	echo a | xargs rm -f
@@ -44,9 +44,9 @@ ask	powerdown
 ask	shutdown -h now
 ask	halt
 ask	sudo rm -rf /tmp/x
-ask	echo rm	# 已知副作用：空白後的 rm 被當成指令位置
+ask	echo rm	# known side effect: rm after whitespace counts as a command position
 pass	grep -c harm /tmp/x
-# ===== ask：ZFS / 容器 / VM =====
+# ===== ask: ZFS / containers / VMs =====
 ask	zfs destroy tank/data@snap
 ask	zfs rollback tank/data@snap
 ask	docker rm -f nginx
@@ -60,20 +60,20 @@ ask	virsh undefine win11
 pass	docker ps -a
 pass	docker logs --tail 50 nginx
 pass	virsh list --all
-# ===== ask：間接執行 =====
+# ===== ask: indirect execution =====
 ask	bash -c 'echo hi'
 ask	sh -c "echo hi"
 ask	bash -lc 'echo hi'
 ask	eval "$x"
 ask	echo cm0= | base64 -d | bash
 ask	sh -ec 'echo hi'
-pass	source /tmp/x.sh	# 刻意放行：執行腳本檔與 bash x.sh 一視同仁，內容是 Write 工具寫的、看得到
+pass	source /tmp/x.sh	# allowed on purpose: running a script file is treated like bash x.sh; the file was written by the Write tool and is visible
 pass	. /tmp/x.sh
 pass	bash /tmp/x.sh
 pass	bash /boot/steward-dev/tests/run-all.sh --quick
 pass	echo source
 pass	cat ./file.sh
-# ===== ask：寫 /boot/config =====
+# ===== ask: writes into /boot/config =====
 ask	cp /tmp/go /boot/config/go
 ask	echo x > /boot/config/go
 ask	echo x >> /boot/config/stop
@@ -89,7 +89,7 @@ pass	cd /boot && ls config/
 pass	cat /boot/config/go
 pass	grep steward /boot/config/stop
 pass	diff /boot/config/stop /boot/config/stop.before-steward
-# ===== ask：git 改寫工作樹（/boot 是 git repo，/boot/config 被追蹤）=====
+# ===== ask: git rewriting the working tree (/boot is a git repo and /boot/config is tracked) =====
 ask	git reset --hard HEAD
 ask	git -C /boot reset --hard HEAD
 ask	git -C /boot reset HEAD~1 --hard
@@ -103,19 +103,19 @@ ask	git stash
 ask	git stash pop
 ask	git -C /boot/ stash
 ask	git -C /boot clean -nd
-ask	cd /boot/steward-dev && git stash	# 沒指定 repo 就當成 /boot（steward-dev 目前就在 /boot repo 裡）
+ask	cd /boot/steward-dev && git stash	# no repo given, so /boot is assumed (steward-dev sits inside the /boot repo)
 pass	git stash list
 pass	git stash show
-pass	git -C /boot/steward-dev stash	# 指到別的 repo：不管
+pass	git -C /boot/steward-dev stash	# points at another repo: not our concern
 pass	git -C /tmp/repo reset --hard HEAD
 pass	git --git-dir=/tmp/repo/.git --work-tree=/tmp/repo checkout -- .
-pass	git -C /boot reset HEAD~1	# 沒有 --hard：只動 index
+pass	git -C /boot reset HEAD~1	# no --hard: only the index moves
 pass	git checkout -b feature
 pass	git -C /boot restore --help
 pass	git -C /boot status --short
 pass	git -C /boot log --oneline -3
 pass	git -C /boot diff
-# ===== ask：改 hook 或權限規則（新舊路徑、相對路徑）=====
+# ===== ask: editing the hook or the permission rules (new and old paths, relative paths) =====
 ask	sed -i 's/x/y/' /boot/steward/hooks/bash-guard.sh
 ask	sed -i 's/x/y/' /boot/claude-code/hooks/bash-guard.sh
 ask	perl -pi -e 's/x/y/' /boot/steward/hooks/bash-guard.sh
@@ -133,7 +133,7 @@ pass	cd /boot/steward/home && jq . settings.json
 pass	cat /boot/steward/hooks/bash-guard.sh
 pass	jq . /boot/steward/home/settings.json
 pass	bash -n /boot/steward/hooks/bash-guard.sh
-# ===== pass：日常唯讀 =====
+# ===== pass: everyday read-only =====
 pass	ls -la /boot/steward
 pass	cat /boot/steward/steward.conf
 pass	steward status

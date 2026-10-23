@@ -1,16 +1,16 @@
 #!/bin/bash
-# 用案例檔測 bash-guard hook。用法：hook-test.sh <hook 腳本> [案例檔]
-# 案例檔格式：want<TAB>command，want = deny | ask | pass；# 開頭與空行略過。
-# hook 只讀 stdin 的 JSON 並印出判定，不會執行案例裡的指令。
+# Test the bash-guard hook against a case file. Usage: hook-test.sh <hook script> [case file]
+# Case file format: want<TAB>command, where want = deny | ask | pass; lines starting with # and blank lines are skipped.
+# The hook only reads JSON from stdin and prints its decision; the commands in the cases are never executed.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
-hook=${1:?用法：hook-test.sh <hook 腳本> [案例檔]}
+hook=${1:?usage: hook-test.sh <hook script> [case file]}
 cases=${2:-$here/hook-cases.tsv}
-[ -f "$hook" ] || { echo "找不到 hook：$hook" >&2; exit 2; }
-[ -f "$cases" ] || { echo "找不到案例檔：$cases" >&2; exit 2; }
+[ -f "$hook" ] || { echo "hook not found: $hook" >&2; exit 2; }
+[ -f "$cases" ] || { echo "case file not found: $cases" >&2; exit 2; }
 
 n=0 fail=0
-while IFS=$'\t' read -r want cmd _comment; do # 第三欄起是註解
+while IFS=$'\t' read -r want cmd _comment; do # third column onward is a comment
   case "$want" in '' | '#'*) continue ;; esac
   n=$((n + 1))
   out=$(jq -cn --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c}}' | bash "$hook" 2>/dev/null)
@@ -23,5 +23,5 @@ while IFS=$'\t' read -r want cmd _comment; do # 第三欄起是註解
     fail=$((fail + 1))
   fi
 done <"$cases"
-echo "hook-test：$((n - fail))/$n 通過（$hook）"
+echo "hook-test: $((n - fail))/$n passed ($hook)"
 ((fail == 0))

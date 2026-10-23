@@ -13,7 +13,7 @@ Steward does not depend on the array or on Docker. It keeps working while the ar
 - **Array-aware.** When the array is about to stop, Steward ends any of its own processes that hold `/mnt`, so the array can unmount.
 - **Automatic Claude Code updates.** In remote-control mode Claude Code does not update itself. Steward checks the stable channel once a day after 08:00, installs new releases, and restarts the service only when no session has been active for 15 minutes.
 - **Guardrails for a root shell.** Claude runs as root directly on the host. Steward ships a permission policy and a command-inspecting hook that block disk-wiping tools and secret files outright, and ask before deletions, shutdowns, or writes to `/boot/config`.
-- **A Settings page.** Settings → Steward shows status and the current connection link, and has Start / Stop / Restart and a guided first-time sign-in.
+- **A Settings page.** Settings -> Steward shows status and the current connection link, and has Start / Stop / Restart and a guided first-time sign-in.
 
 ## Requirements
 
@@ -26,13 +26,13 @@ Steward does not depend on the array or on Docker. It keeps working while the ar
 
 **From the webGUI (recommended)**
 
-1. Open **Plugins → Install Plugin**, paste the URL below, and click **Install**.
+1. Open **Plugins -> Install Plugin**, paste the URL below, and click **Install**.
 
    ```
    https://raw.githubusercontent.com/hom-wang/steward/main/steward.plg
    ```
 
-2. Open **Settings → Steward** and click the sign-in button. A terminal window opens and walks you through two steps: signing in to claude.ai, and running Remote Control once in the foreground to answer its one-time prompts. When the connection link appears, open the Claude app's Code tab or claude.ai/code and confirm you can see the server, then press Ctrl+C. Answer **Y** to enable the service and start it at boot.
+2. Open **Settings -> Steward** and click the sign-in button. A terminal window opens and walks you through two steps: signing in to claude.ai, and running Remote Control once in the foreground to answer its one-time prompts. When the connection link appears, open the Claude app's Code tab or claude.ai/code and confirm you can see the server, then press Ctrl+C. Answer **Y** to enable the service and start it at boot.
 
    If the browser blocks the pop-up, allow pop-ups for the Unraid site, or run `steward setup` from the Unraid terminal or SSH instead.
 
@@ -83,7 +83,7 @@ Steward deliberately keeps its data **outside** `/boot/config`. Unraid Connect's
 Two caveats remain:
 
 - The webGUI's local **Flash Backup** zips the whole boot device, including `/boot/steward/home`. Treat that zip as a secret.
-- If the boot device is exported over SMB, the credentials are reachable over SMB. The installer warns about this; set the flash share's Export to **No** under Main → Boot Device.
+- If the boot device is exported over SMB, the credentials are reachable over SMB. The installer warns about this; set the flash share's Export to **No** under Main -> Boot Device.
 
 Session transcripts are stored in plain text under `home/projects/` and are synced to Anthropic as part of normal Claude Code operation. The shipped `CLAUDE.md` tells Claude never to read or print password hashes, keys or tokens for this reason.
 
