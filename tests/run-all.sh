@@ -22,7 +22,7 @@ step "plg sync" bash -c '
 # Everything in the repo is plain ASCII, apart from the box-drawing dividers and spinner glyphs in steward.sh
 step "ascii only" bash -c '
   tab=$(printf "\t")
-  found=$(grep -n "[^ -~$tab]" "'"$dev"'/steward.sh" "'"$dev"'/steward.plg" "'"$dev"'/README.md" "'"$dev"'/LICENSE" "'"$dev"'"/tests/* "'"$dev"'"/.github/workflows/* | grep -v "[─⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✔✘]")
+  found=$(grep -n "[^ -~$tab]" "'"$dev"'/steward.sh" "'"$dev"'/steward.plg" "'"$dev"'/README.md" "'"$dev"'/LICENSE" "'"$dev"'"/tests/* "'"$dev"'"/.github/workflows/* "'"$dev"'"/ca/*.xml "'"$dev"'"/images/*.svg "'"$dev"'"/docs/*.md | grep -v "[─⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✔✘]")
   if [ -n "$found" ]; then printf "%s\n" "$found" | head -n 5 | cut -c1-120; echo "non-ASCII text found (see above)"; exit 1; fi
   echo "ASCII only, apart from the allowed glyphs"'
 

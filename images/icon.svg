@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Steward icon: a terminal prompt on a dark tile. Rasterised to icon.png for Community Applications. -->
+  <rect x="16" y="16" width="480" height="480" rx="96" ry="96" fill="#1f2430"/>
+  <rect x="16" y="16" width="480" height="480" rx="96" ry="96" fill="none" stroke="#3a4152" stroke-width="8"/>
+  <!-- ">" chevron -->
+  <polyline points="136,168 248,256 136,344" fill="none" stroke="#ffffff" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- "_" cursor in Unraid orange -->
+  <rect x="272" y="312" width="120" height="44" rx="12" ry="12" fill="#e68a00"/>
+</svg>
