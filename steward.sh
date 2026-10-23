@@ -1,5 +1,5 @@
 #!/bin/bash
-[ -f "$0" ] && grep -q $'\r' "$0" && { tr -d '\r' <"$0" >"/tmp/.steward.$$" && exec bash "/tmp/.steward.$$" "$@"; } # If the file was saved with Windows line endings, convert it and re-run
+[ -f "$0" ] && grep -q $'\r' "$0" && { t=$(mktemp /tmp/.steward.XXXXXX) && tr -d '\r' <"$0" >"$t" && exec bash "$t" "$@"; } # If the file was saved with Windows line endings, convert it and re-run
 #
 # Steward - runs Claude Code as a resident service on an Unraid host, operated from your phone or browser via Remote Control.
 # Does not depend on the array or on Docker: the service keeps running while the array is stopped.
