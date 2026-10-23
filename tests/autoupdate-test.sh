@@ -6,6 +6,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 src=${1:-$here/../steward.sh}
 W=$(mktemp -d /tmp/steward-au-test.XXXXXX)
 trap 'rm -rf "$W"' EXIT
+# shellcheck disable=SC2034 # 這些變數給被 source 進來的 auto_update() 用
 RUN_DIR=$W CFG_DIR=$W INSTALL_LOG=$W/install.log NATIVE_BIN=fake_claude
 eval "$(sed -n '/^AU_DONE=/,/^AU_NEXT=/p; /^auto_update() {/,/^}/p' "$src")"
 declare -f auto_update >/dev/null || { echo "在 $src 找不到 auto_update()" >&2; exit 2; }
