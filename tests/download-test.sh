@@ -10,6 +10,7 @@ trap 'rm -rf "$W"' EXIT
 HOME=$W/root
 # shellcheck disable=SC2034 # used by the sourced functions
 VERSIONS=$HOME/.local/share/claude/versions NATIVE_BIN=$HOME/.local/bin/claude CACHE=$W/cache RUN_DIR=$W/run INSTALL_LOG=$W/install.log LOG=$W/steward.log NETWAIT=0
+# shellcheck disable=SC2034 # used by the sourced functions
 CLAUDE_RELEASES=https://example.invalid/releases CLAUDE_PLATFORM=linux-x64
 mkdir -p "$RUN_DIR" "$CACHE"
 eval "$(sed -n '/^manifest_sha256() {/,/^}/p; /^other_version() {/,/^}/p; /^verify_installed() {/,/^}/p; /^cache_binary() {/,/^}/p; /^restore_binary() {/,/^}/p; /^download_binary() {/,/^}/p; /^ensure_binary() {/,/^}/p' "$src")"
@@ -28,6 +29,7 @@ notify_user() { echo "notify: $1" >>"$LOG"; }
 FIX=$W/fixture
 printf '#!/bin/bash\necho "9.9.9 (fake)"\n' >"$FIX"
 FIX_SUM=$(file_sha256 "$FIX")
+# shellcheck disable=SC2034 # used by the sourced functions
 CLAUDE_PIN_VERSION=9.9.9 CLAUDE_PIN_SHA256=$FIX_SUM
 TAMPER=0 OFFLINE=0 MANIFEST_SUM=$FIX_SUM
 curl() { # mock: only the URL and -o matter. Records every call
