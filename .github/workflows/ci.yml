@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'release/**']
+    branches: [main]
   pull_request:
 
 jobs:
@@ -31,5 +31,6 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           BASE_REF: ${{ github.base_ref }}
-          HEAD_REF: ${{ github.head_ref }}
+          # a branch from a fork never counts as a release branch
+          HEAD_REF: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.head_ref || format('fork/{0}', github.head_ref) }}
         run: bash tests/release-check.sh origin/main "$BASE_REF" "$HEAD_REF"

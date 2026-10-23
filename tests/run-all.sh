@@ -53,8 +53,10 @@ step "auto_update scenarios" bash "$here/autoupdate-test.sh" "$dev/steward.sh"
 
 step "download and checksum scenarios" bash "$here/download-test.sh" "$dev/steward.sh"
 
-# Version bump and release invariants against main (RELEASING.md); CI passes the PR's base branch instead
-git -C "$dev" rev-parse -q --verify origin/main >/dev/null && step "release rules (against origin/main)" bash "$here/release-check.sh" origin/main
+# Version bump and release invariants against main (RELEASING.md), including uncommitted edits. Local runs only:
+# CI runs release-check in its own step with the PR's target and source branch.
+[ -z "${CI:-}" ] && git -C "$dev" rev-parse -q --verify origin/main >/dev/null &&
+  step "release rules (against origin/main)" bash "$here/release-check.sh" origin/main
 
 [ "${1:-}" = --quick ] || step "smoke test (fake root)" bash "$here/smoke-test.sh" "$dev/steward.sh"
 
