@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
   pull_request:
 
 jobs:
@@ -26,3 +26,10 @@ jobs:
 
       - name: Quick tests (syntax, plugin sync, hook cases, auto-update scenarios)
         run: bash tests/run-all.sh --quick
+
+      - name: Release rules (version bump, changelog, release branch flow, fixed update URL)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: bash tests/release-check.sh origin/main "$BASE_REF" "$HEAD_REF"

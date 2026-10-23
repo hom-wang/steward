@@ -162,6 +162,8 @@ tests/run-all.sh --quick   # skip the smoke test
 
 All tests are safe to run on a live server: the hook test only feeds JSON to the hook, the auto-update test uses mocks, and the smoke test runs against a fake root directory (`STEWARD_TEST_ROOT`) and never starts a service.
 
+Merging to `main` publishes a release. Versioning and the release checklist are in [RELEASING.md](RELEASING.md).
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
