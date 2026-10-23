@@ -1,0 +1,7 @@
+<CommunityApplications>
+  <Profile>
+    Steward: runs Claude Code as an always-on service on your Unraid server, reachable from the Claude app or claude.ai/code through Remote Control. Independent of the array and Docker. Requires Unraid 7.3 or newer with Internal Boot; USB boot is not supported. One plugin, MIT licensed, fully open source. Support and bug reports: https://github.com/hom-wang/steward/issues
+  </Profile>
+  <Icon>https://raw.githubusercontent.com/hom-wang/steward/main/images/icon.svg</Icon>
+  <WebPage>https://github.com/hom-wang/steward</WebPage>
+</CommunityApplications>

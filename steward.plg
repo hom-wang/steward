@@ -28,7 +28,7 @@
   page's backend, the main script, and the steps run on install and removal.
 -->
 
-<PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" icon="terminal" min="7.3.0" pluginURL="https://raw.githubusercontent.com/hom-wang/steward/main/steward.plg">
+<PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" icon="terminal" min="7.3.0" pluginURL="https://raw.githubusercontent.com/hom-wang/steward/main/steward.plg" support="https://github.com/hom-wang/steward/issues">
 
 <CHANGES>
 ### 2026.10.25

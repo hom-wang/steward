@@ -1,0 +1,15 @@
+<Plugin>
+  <Name>Steward</Name>
+  <Overview>Runs Claude Code as an always-on service on your Unraid server, reachable from the Claude app on your phone or from claude.ai/code through Remote Control. Independent of the array and Docker: it keeps working while the array is stopped and across reboots, with the Claude Code binary cached on the boot device. Includes automatic Claude Code updates (only when no session is active), a Settings page with guided sign-in, and guardrails for a root shell: a permission policy plus a command-inspecting hook that block disk-wiping tools and secret files outright and ask before deletions, shutdowns or writes to /boot/config. Requires Unraid 7.3 or newer with Internal Boot (/boot on ZFS); USB (FAT) boot is not supported. You sign in with your own Claude subscription that includes Claude Code and Remote Control; usage is billed to your own account. Steward is an independent, community-maintained project, not affiliated with, endorsed by, or sponsored by Anthropic PBC or Lime Technology, Inc. "Claude" and "Claude Code" are trademarks of Anthropic PBC; "Unraid" is a trademark of Lime Technology, Inc.</Overview>
+  <PluginURL>https://raw.githubusercontent.com/hom-wang/steward/main/steward.plg</PluginURL>
+  <PluginAuthor>hom-wang</PluginAuthor>
+  <Support>https://github.com/hom-wang/steward/issues</Support>
+  <Project>https://github.com/hom-wang/steward</Project>
+  <ReadMe>https://raw.githubusercontent.com/hom-wang/steward/main/README.md</ReadMe>
+  <Category>Tools:System</Category>
+  <Beta>false</Beta>
+  <MinVer>7.3.0</MinVer>
+  <Icon>https://raw.githubusercontent.com/hom-wang/steward/main/images/icon.png</Icon>
+  <License>MIT</License>
+  <ExtraSearchTerms>claude code anthropic ai assistant remote control agent llm terminal</ExtraSearchTerms>
+</Plugin>
