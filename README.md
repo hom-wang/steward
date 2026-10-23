@@ -4,7 +4,7 @@ Run [Claude Code](https://code.claude.com) as an always-on service on your Unrai
 
 Steward does not depend on the array or on Docker. It keeps working while the array is stopped, while disks are spun down, and across reboots. Everything it owns lives on the boot device under `/boot/steward`.
 
-> Steward is an independent, community-maintained project. It is not affiliated with, endorsed by, or sponsored by Anthropic PBC or Lime Technology, Inc. "Claude" and "Claude Code" are trademarks of Anthropic PBC; "Unraid" is a trademark of Lime Technology, Inc. Steward installs the unmodified Claude Code binary through Anthropic's official installer and runs it as a background service. You sign in with your own Claude subscription through Anthropic's own login flow. Steward never sees, stores, or forwards your credentials, and all usage is billed to your own account.
+> Steward is an independent, community-maintained project. It is not affiliated with, endorsed by, or sponsored by Anthropic PBC or Lime Technology, Inc. "Claude" and "Claude Code" are trademarks of Anthropic PBC; "Unraid" is a trademark of Lime Technology, Inc. Steward downloads the unmodified Claude Code binary from Anthropic's release server, pinned to one version and verified against its published SHA256, and runs it as a background service. You sign in with your own Claude subscription through Anthropic's own login flow. Steward never sees, stores, or forwards your credentials, and all usage is billed to your own account.
 
 ## What you get
 
@@ -13,6 +13,7 @@ Steward does not depend on the array or on Docker. It keeps working while the ar
 - **Array-aware.** When the array is about to stop, Steward ends any of its own processes that hold `/mnt`, so the array can unmount.
 - **Automatic Claude Code updates.** In remote-control mode Claude Code does not update itself. Steward checks the stable channel once a day after 08:00, installs new releases, and restarts the service only when no session has been active for 15 minutes.
 - **Guardrails for a root shell.** Claude runs as root directly on the host. Steward ships a permission policy and a command-inspecting hook that block disk-wiping tools and secret files outright, and ask before deletions, shutdowns, or writes to `/boot/config`.
+- **Verified binary.** The first install downloads one pinned Claude Code version straight from Anthropic's release server and installs it only if its SHA256 matches the value built into the plugin; no installer script is run. Every later update is checked against the SHA256 Anthropic publishes for that version before it is kept, and the backup on the boot device is checked before it is restored.
 - **A Settings page.** Settings -> Steward shows status and the current connection link, and has Start / Stop / Restart and a guided first-time sign-in.
 
 ## Requirements
@@ -130,7 +131,8 @@ Known limits, by design: it matches text, so a harmless command that merely ment
 ## Updates
 
 - **Steward itself** updates through the Plugins page like any other plugin. Your data and configuration are untouched.
-- **Claude Code** is checked once a day after 08:00 by the watchdog. A new stable release is installed with Anthropic's installer, cached to the boot device, and applied by restarting the service once no session has written a transcript for 15 minutes. If sessions are busy, Steward tries again an hour later. `steward status` shows both the installed version and the one the running service is using. `steward update` runs Claude Code's own updater right away, caches the result to the boot device, and restarts the service if the version changed.
+- **Claude Code** is checked once a day after 08:00 by the watchdog. A new stable release is installed with Claude Code's own updater (`claude install <version>`), verified against the SHA256 Anthropic publishes for that version, cached to the boot device, and applied by restarting the service once no session has written a transcript for 15 minutes. If sessions are busy, Steward tries again an hour later; if the binary does not verify, it is removed, the previous version stays in use and you get a notification. `steward status` shows both the installed version and the one the running service is using. `steward update` runs the updater right away with the same checks, and restarts the service if the version changed.
+- **The pinned first-install version** (`CLAUDE_PIN_VERSION` and its SHA256 in `steward.sh`) moves forward with each Steward release. It only matters for a fresh install or a lost backup; existing installs keep updating through the updater.
 
 ## Upgrading from claude-unraid
 
