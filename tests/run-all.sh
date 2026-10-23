@@ -26,6 +26,22 @@ step "ascii only" bash -c '
   if [ -n "$found" ]; then printf "%s\n" "$found" | head -n 5 | cut -c1-120; echo "non-ASCII text found (see above)"; exit 1; fi
   echo "ASCII only, apart from the allowed glyphs"'
 
+# Nothing that must not be published: keys, tokens, e-mail addresses, private IPs, MACs, Remote Control or session ids,
+# Unraid registration GUIDs, personal names. Scans every tracked text file in the working tree. Run before every commit.
+step "secrets and personal data" bash -c '
+  cd "'"$dev"'" || exit 1
+  pat="[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[a-z]{2,}"
+  pat="$pat|(^|[^0-9.])(10|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\.[0-9]+\.[0-9]+([^0-9.]|$)"
+  pat="$pat|\b([0-9a-f]{2}:){5}[0-9a-f]{2}\b"
+  pat="$pat|\benv_[A-Za-z0-9]{12,}|\bsession_[A-Za-z0-9]{12,}"
+  pat="$pat|\bgh[pousr]_[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]+|\bAKIA[0-9A-Z]{12,}"
+  pat="$pat|BEGIN [A-Z ]*PRIVATE KEY|ssh-(rsa|ed25519|ecdsa) AAAA"
+  pat="$pat|csrf_token=.|regGUID=.|flashGUID=.|[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}"
+  pat="$pat|\.credentials\.json|hosts\.yml|unraid-api\.key"
+  found=$(git ls-files -z | xargs -0 command grep -nIE -i "$pat" 2>/dev/null | command grep -vE "^(README\.md|skills/[^:]+|docs/[^:]+|steward\.(sh|plg)):[0-9]+:.*(\.credentials\.json|unraid-api\.key|hosts\.yml)" )
+  if [ -n "$found" ]; then printf "%s\n" "$found" | head -n 10 | cut -c1-140; echo "possible secret or personal data (see above); do not commit"; exit 1; fi
+  echo "no secrets or personal data found in tracked files"'
+
 # The hook embedded in the dev script (the HOOK heredoc inside write_defaults)
 tmp=$(mktemp /tmp/steward-hook.XXXXXX)
 sed -n "/<<'HOOK'$/,/^HOOK$/p" "$dev/steward.sh" | sed '1d;$d' >"$tmp"
