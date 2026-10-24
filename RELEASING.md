@@ -109,10 +109,32 @@ included, without the branch flow. `tests/run-all.sh` separately checks that `st
    into its `<FILE>` block. `tests/run-all.sh` fails if any embedded copy differs.
 6. Run `tests/run-all.sh` (the full run, including the smoke test) before each PR.
 
+## Testing a development build
+
+Never install a branch's `steward.plg` as it is. It already carries the version of the coming release,
+so a server running it would see the real release as the same version and never offer it, and the
+server would claim to run a release it does not. Build a development copy instead:
+
+```
+tests/dev-install.sh
+```
+
+It writes `/tmp/steward-dev/steward.plg` with the version `<main's version>-dev.<commit>` (plus
+`.dirty` for uncommitted changes to shipped files), e.g. `2026.10.25.1-dev.c6a1b14`. That sorts after
+the version on `main` and before any later release, so once the release is merged the server offers it
+on the Plugins page like any other update, which also tests the update path users take. The repository
+keeps its real version.
+
+The script prints the install command. `plugin install` refuses the same or an older version, so the
+first development copy over a release, or a rebuild of the same commit, needs `forced`; the script says
+when. Installing restarts the Steward service and drops Remote Control sessions for a few seconds; run
+from a session inside the service, the plugin waits 10 seconds and restarts it in the background.
+
 ## Releasing
 
-1. When everything planned is merged into the release branch, install its `steward.plg` on a test
-   server and check *Settings -> Steward*, `steward status` and a Remote Control session.
+1. When everything planned is merged into the release branch, install a development build of it
+   (above) on a test server and check *Settings -> Steward*, `steward status` and a Remote Control
+   session.
 2. Open the PR from `release/v<version>` to `main`. Title: `Steward <version>`; the body lists the
    PRs it contains.
 3. On the release date, make sure the release branch is up to date with `main` and CI is green, then
