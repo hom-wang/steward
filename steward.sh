@@ -36,7 +36,7 @@
 #   so the watchdog checks once a day after 08:00 and restarts to apply the update only when no session is in use (see auto_update).
 
 set -u
-STEWARD_VERSION="2026.10.25.1"
+STEWARD_VERSION="2026.10.26"
 SPIN_PID="" SPIN_FILE="" SPIN_MSG="" SPIN_T0=0 SPIN_ACTIVE=0 SPIN_OWNER=$$ FANCY=0 TTY_FD=2 HOLD_WINDOW=0
 cleanup() { # every exit path ends up here, including Ctrl+C and the terminal being closed
   if [ -n "$SPIN_PID" ]; then # progress display still running: stop it and wipe that line
@@ -88,7 +88,7 @@ PLUGIN=0
 export HOME="$P/root"
 export CLAUDE_CONFIG_DIR="$CFG_DIR"
 export PATH="$BIN_DIR:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$HOME/.local/bin"
-case "${LC_ALL:-${LANG:-}}" in *[Uu][Tt][Ff]*) ;; *) export LANG=C.UTF-8 ;; esac # the boot script's environment has no locale; add UTF-8
+case "${LC_ALL:-${LANG:-}}" in *[Uu][Tt][Ff]*) ;; *) export LANG=en_US.UTF-8 ;; esac # the boot script's environment has no locale; en_US.UTF-8 is the only UTF-8 locale Unraid ships (C.UTF-8 does not exist and makes perl/virsh warn)
 NATIVE_BIN="$HOME/.local/bin/claude"
 VERSIONS="$HOME/.local/share/claude/versions"
 # Where Claude Code releases come from, and the one version a fresh install downloads. The binary is only installed if its
@@ -967,6 +967,7 @@ migrate_legacy() { # Upgrade from the old name claude-unraid: move the data, sto
     # Do not run the old plugin's remove section: it would delete the shared /usr/local/bin/claude too. Moving it to plugins-removed stops it from loading
     mkdir -p "$P/boot/config/plugins-removed"
     mv -f "$P/boot/config/plugins/claude-unraid.plg" "$P/boot/config/plugins-removed/"
+    rm -f "$P/var/log/plugins/claude-unraid.plg" # the plugin manager's "installed" marker (RAM); otherwise update_cron keeps looking for the old plugin until reboot
   fi
   [ -e "$P/usr/local/sbin/update_cron" ] && bash "$P/usr/local/sbin/update_cron" >/dev/null 2>&1
   # Paths and names inside the old config files (originals backed up)
@@ -1476,6 +1477,99 @@ cmd_gui() {
   esac
 }
 
+# ───────────────────────── Optional skills ─────────────────────────
+# Guides for Claude (array, docs, tools, health checks) that a user can opt into. A fresh install ships none of them:
+# the plugin carries the files under $PLUGIN_DIR/skills, and "steward skills install" copies one into the config dir,
+# where Claude Code picks it up at the next session. Script installs have no plugin dir and download from the repository.
+SKILLS_SRC="$PLUGIN_DIR/skills"
+SKILLS_DST="$CFG_DIR/skills"
+SKILLS_RAW="https://raw.githubusercontent.com/hom-wang/steward/main/skills"
+SKILL_NAMES="unraid unraid-docs unraid-tools unraid-health" # must match the skills/ directory in the repository (tests check)
+
+skill_source() { # $1=name $2=download timeout in seconds. Prints the path of a SKILL.md to install from: the shipped copy, else a downloaded temp file
+  if [ -f "$SKILLS_SRC/$1/SKILL.md" ]; then
+    printf '%s\n' "$SKILLS_SRC/$1/SKILL.md"
+    return 0
+  fi
+  local t
+  t=$(mktemp "/tmp/.steward-install.$$.skill.XXXXXX") || return 1 # the cleanup trap removes /tmp/.steward-install.$$.* on any exit
+  # Accept the download only if it looks like one of our skills: a captive portal or proxy page also answers 200
+  if curl -fsSL --max-time "${2:-30}" "$SKILLS_RAW/$1/SKILL.md" -o "$t" 2>/dev/null && [ "$(head -n1 "$t")" = "---" ] &&
+    grep -qx "name: $1" "$t" && [ -n "$(skill_meta "$t" skill-version)" ]; then
+    printf '%s\n' "$t"
+  else
+    rm -f "$t"
+    return 1
+  fi
+}
+skill_meta() { # $1=SKILL.md $2=front-matter key (skill-version, unraid-verified, unraid-applies)
+  sed -n '2,/^---$/p' "$1" | sed -n "s/^[[:space:]]*$2:[[:space:]]*\"\{0,1\}\([^\"]*\)\"\{0,1\}[[:space:]]*$/\1/p" | head -n1
+}
+skill_known() { # $1=name. Only names from the fixed list, so nothing outside $SKILLS_DST/<name> can ever be touched
+  case "$1" in '' | *[!a-z0-9-]*) return 1 ;; esac
+  case " $SKILL_NAMES " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+skill_tmp_done() { case "$1" in /tmp/.steward-install.*) rm -f "$1" ;; esac; }
+
+cmd_skills() {
+  local sub=${1:-list} name f dst state
+  [ $# -gt 0 ] && shift
+  case "$sub" in
+  list)
+    say "Optional skills. Install: steward skills install <name>   Remove: steward skills remove <name>"
+    say "Installed skills live in $SKILLS_DST and are read by Claude Code at the start of each session."
+    [ -d "$SKILLS_SRC" ] || say "(no shipped copies on this install; versions below come from a quick download and may be missing offline)"
+    for name in $SKILL_NAMES; do
+      state="not installed"
+      if [ -f "$SKILLS_DST/$name/SKILL.md" ]; then state="installed $(skill_meta "$SKILLS_DST/$name/SKILL.md" skill-version)"; fi
+      if f=$(skill_source "$name" 8); then
+        if [ -f "$SKILLS_DST/$name/SKILL.md" ] && ! cmp -s "$f" "$SKILLS_DST/$name/SKILL.md"; then
+          if [ "$(skill_meta "$f" skill-version)" = "$(skill_meta "$SKILLS_DST/$name/SKILL.md" skill-version)" ]; then
+            state="$state, differs from the shipped copy (edited locally?)"
+          else
+            state="$state, update available $(skill_meta "$f" skill-version)"
+          fi
+        fi
+        printf '  %-14s %-12s verified %-7s applies %-10s %s\n' "$name" "$(skill_meta "$f" skill-version)" "$(skill_meta "$f" unraid-verified)" "$(skill_meta "$f" unraid-applies)" "$state"
+        skill_tmp_done "$f"
+      else
+        printf '  %-14s %-12s %-35s %s\n' "$name" "?" "(not available offline)" "$state"
+      fi
+    done
+    ;;
+  install)
+    [ $# -ge 1 ] || die "usage: steward skills install <name> [<name> ...]   (names: $SKILL_NAMES)"
+    for name in "$@"; do
+      skill_known "$name" || die "unknown skill: $name (steward skills list)"
+      f=$(skill_source "$name" 30) || die "cannot get $name: not shipped with this install and the download failed"
+      dst=$SKILLS_DST/$name
+      mkdir -p "$dst" || die "cannot create $dst"
+      if [ -f "$dst/SKILL.md" ] && ! cmp -s "$f" "$dst/SKILL.md"; then
+        cp -p "$dst/SKILL.md" "$dst/SKILL.md.before-$(date +%Y%m%d-%H%M%S)" || die "cannot back up the existing $dst/SKILL.md"
+        say "$name: existing copy differs, kept as SKILL.md.before-<timestamp>"
+      fi
+      cp "$f" "$dst/SKILL.md" && chmod 644 "$dst/SKILL.md" || die "cannot write $dst/SKILL.md"
+      say "$name $(skill_meta "$dst/SKILL.md" skill-version) installed (verified on Unraid $(skill_meta "$dst/SKILL.md" unraid-verified)); new sessions will see it"
+      skill_tmp_done "$f"
+    done
+    ;;
+  remove)
+    [ $# -ge 1 ] || die "usage: steward skills remove <name> [<name> ...]"
+    for name in "$@"; do
+      skill_known "$name" || die "unknown skill: $name"
+      if [ -d "$SKILLS_DST/$name" ]; then
+        rm -rf "${SKILLS_DST:?}/$name" && say "$name removed (including its SKILL.md.before-* backups)"
+      else
+        say "$name is not installed"
+      fi
+    done
+    rmdir "$SKILLS_DST" 2>/dev/null || true # back to the clean state when nothing is left
+    ;;
+  *) die "usage: steward skills [list | install <name> ... | remove <name> ...]" ;;
+  esac
+}
+
 usage() {
   cat <<'EOF'
 steward <command>
@@ -1488,6 +1582,7 @@ steward <command>
   logs [-f|N]  Show the log
   update       Update Claude Code now (normally updated automatically daily after 08:00 when no session is in use)
   uninstall    Remove hooks and stop the service, keeping the data (for plugin installs, remove it on the Plugins page)
+  skills       Optional guides for Claude: list, install <name>, remove <name>. Nothing is installed by default
 EOF
 }
 
@@ -1528,5 +1623,6 @@ _event) on_array_stop ;;
 _plugin_install) cmd_plugin_install ;;
 _plugin_remove) cmd_plugin_remove ;;
 _gui) cmd_gui "$@" ;;
+skills) cmd_skills "$@" ;;
 *) usage ;;
 esac
